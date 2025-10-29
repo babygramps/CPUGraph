@@ -33,6 +33,15 @@ from data_loader import DataLoadError, SensorDataLoader
 from watermark import load_watermark_image
 from plotting import SensorPlotter, HoverTooltipHandler, TimeSelectionHandler
 from plotting.plotter import PlotOptions
+from ui.dialogs import SeriesCustomizeDialog
+from ui.controls import (
+    SeriesSelector,
+    PlotOptionsPanel,
+    LegendOptionsPanel,
+    GraphLabelsPanel,
+    TimeWindowPanel,
+    CO2CalculationPanel,
+)
 
 
 class SensorDashboardApp(tk.Tk):
@@ -154,126 +163,75 @@ class SensorDashboardApp(tk.Tk):
         self.controls_canvas.bind("<Button-4>", lambda e: self.controls_canvas.xview_scroll(-1, "units"))
         self.controls_canvas.bind("<Button-5>", lambda e: self.controls_canvas.xview_scroll(1, "units"))
 
-        sel_frame = ttk.LabelFrame(mid, text="Series Selection"); sel_frame.pack(side=tk.LEFT, padx=calc_padding, pady=calc_padding//2, fill=tk.Y)
-        
-        # Left axis with filter
-        ttk.Label(sel_frame, text="Left Y-axis").grid(row=0, column=0, sticky="w", padx=4, pady=2)
         # Calculate adaptive widths based on screen size
         listbox_width = max(min(int(screen_width / 25), 50), 35)
-        entry_width = listbox_width
-        self.left_filter = ttk.Entry(sel_frame, width=entry_width)
-        self.left_filter.grid(row=1, column=0, padx=4, pady=2)
-        self.left_filter.insert(0, "Filter...")
-        self.left_filter.bind("<FocusIn>", lambda e: self.on_filter_focus_in(self.left_filter))
-        self.left_filter.bind("<FocusOut>", lambda e: self.on_filter_focus_out(self.left_filter))
-        self.left_filter.bind("<KeyRelease>", lambda e: self.filter_listbox("left"))
         
-        # Left axis select/deselect buttons
-        left_btn_frame = ttk.Frame(sel_frame)
-        left_btn_frame.grid(row=2, column=0, sticky="w", padx=4, pady=2)
-        ttk.Button(left_btn_frame, text="Select All", command=lambda: self.select_all("left"), width=12).pack(side=tk.LEFT, padx=2)
-        ttk.Button(left_btn_frame, text="Deselect All", command=lambda: self.deselect_all("left"), width=12).pack(side=tk.LEFT, padx=2)
-        ttk.Label(left_btn_frame, text="(Ctrl+Click, Shift+Click)", font=("TkDefaultFont", 7), foreground="gray").pack(side=tk.LEFT, padx=4)
+        # Series selector panel
+        self.series_selector = SeriesSelector(
+            mid, self,
+            listbox_width=listbox_width,
+            on_filter_focus_in=self.on_filter_focus_in,
+            on_filter_focus_out=self.on_filter_focus_out,
+            on_filter_keyrelease=self.filter_listbox,
+            on_selection_changed=self.update_selection_tracking,
+            on_select_all=self.select_all,
+            on_deselect_all=self.deselect_all,
+        )
+        self.series_selector.pack(side=tk.LEFT, padx=calc_padding, pady=calc_padding//2, fill=tk.Y)
         
-        self.left_list = tk.Listbox(sel_frame, selectmode=tk.EXTENDED, width=listbox_width, height=10, exportselection=False)
-        self.left_list.grid(row=3, column=0, padx=4, pady=2)
-        # Bind click events to update selection tracking immediately
-        self.left_list.bind("<<ListboxSelect>>", lambda e: self.update_selection_tracking("left"))
-        
-        # Right axis with filter
-        ttk.Label(sel_frame, text="Right Y-axis").grid(row=0, column=1, sticky="w", padx=4, pady=2)
-        self.right_filter = ttk.Entry(sel_frame, width=entry_width)
-        self.right_filter.grid(row=1, column=1, padx=4, pady=2)
-        self.right_filter.insert(0, "Filter...")
-        self.right_filter.bind("<FocusIn>", lambda e: self.on_filter_focus_in(self.right_filter))
-        self.right_filter.bind("<FocusOut>", lambda e: self.on_filter_focus_out(self.right_filter))
-        self.right_filter.bind("<KeyRelease>", lambda e: self.filter_listbox("right"))
-        
-        # Right axis select/deselect buttons
-        right_btn_frame = ttk.Frame(sel_frame)
-        right_btn_frame.grid(row=2, column=1, sticky="w", padx=4, pady=2)
-        ttk.Button(right_btn_frame, text="Select All", command=lambda: self.select_all("right"), width=12).pack(side=tk.LEFT, padx=2)
-        ttk.Button(right_btn_frame, text="Deselect All", command=lambda: self.deselect_all("right"), width=12).pack(side=tk.LEFT, padx=2)
-        ttk.Label(right_btn_frame, text="(Ctrl+Click, Shift+Click)", font=("TkDefaultFont", 7), foreground="gray").pack(side=tk.LEFT, padx=4)
-        
-        self.right_list = tk.Listbox(sel_frame, selectmode=tk.EXTENDED, width=listbox_width, height=10, exportselection=False)
-        self.right_list.grid(row=3, column=1, padx=4, pady=2)
-        # Bind click events to update selection tracking immediately
-        self.right_list.bind("<<ListboxSelect>>", lambda e: self.update_selection_tracking("right"))
+        # Create references for backward compatibility
+        self.left_filter = self.series_selector.left_filter
+        self.right_filter = self.series_selector.right_filter
+        self.left_list = self.series_selector.left_list
+        self.right_list = self.series_selector.right_list
 
-        opt_frame = ttk.LabelFrame(mid, text="Plot Options"); opt_frame.pack(side=tk.LEFT, padx=calc_padding, pady=calc_padding//2, fill=tk.Y)
-        self.grid_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(opt_frame, text="Show grid", variable=self.grid_var).grid(row=0, column=0, columnspan=2, sticky="w", padx=4, pady=2)
-        self.smooth_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(opt_frame, text="Moving-average smoothing", variable=self.smooth_var, command=self.toggle_smooth).grid(row=1, column=0, columnspan=2, sticky="w", padx=4, pady=2)
-        ttk.Label(opt_frame, text="Window (samples):").grid(row=2, column=0, sticky="w", padx=4, pady=2)
-        self.window_entry = ttk.Entry(opt_frame, width=8); self.window_entry.insert(0, "21"); self.window_entry.grid(row=2, column=1, sticky="w", padx=4, pady=2)
-        self.window_entry.state(["disabled"])
-        self.watermark_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(opt_frame, text="Show watermark", variable=self.watermark_var).grid(row=3, column=0, columnspan=2, sticky="w", padx=4, pady=2)
+        # Plot options panel
+        self.plot_options = PlotOptionsPanel(mid, self)
+        self.plot_options.pack(side=tk.LEFT, padx=calc_padding, pady=calc_padding//2, fill=tk.Y)
         
-        # Legend customization section
-        legend_frame = ttk.LabelFrame(mid, text="Legend Options"); legend_frame.pack(side=tk.LEFT, padx=calc_padding, pady=calc_padding//2, fill=tk.Y)
+        # Create references for backward compatibility
+        self.grid_var = self.plot_options.grid_var
+        self.smooth_var = self.plot_options.smooth_var
+        self.window_entry = self.plot_options.window_entry
+        self.watermark_var = self.plot_options.watermark_var
         
-        self.show_legend_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(legend_frame, text="Show legend", variable=self.show_legend_var).grid(row=0, column=0, columnspan=2, sticky="w", padx=4, pady=2)
+        # Legend options panel
+        self.legend_options = LegendOptionsPanel(mid, self)
+        self.legend_options.pack(side=tk.LEFT, padx=calc_padding, pady=calc_padding//2, fill=tk.Y)
         
-        ttk.Label(legend_frame, text="Position:").grid(row=1, column=0, sticky="w", padx=4, pady=2)
-        self.legend_position = ttk.Combobox(legend_frame, width=15, state="readonly")
-        self.legend_position['values'] = ("Upper Left", "Upper Right", "Lower Left", "Lower Right", "Best", "Outside Right", "Outside Bottom")
-        self.legend_position.current(0)  # Default to "Upper Left"
-        self.legend_position.grid(row=1, column=1, sticky="w", padx=4, pady=2)
+        # Create references for backward compatibility
+        self.show_legend_var = self.legend_options.show_legend_var
+        self.legend_position = self.legend_options.legend_position
+        self.legend_fontsize = self.legend_options.legend_fontsize
+        self.legend_columns = self.legend_options.legend_columns
+        self.legend_framealpha_var = self.legend_options.legend_framealpha_var
         
-        ttk.Label(legend_frame, text="Font size:").grid(row=2, column=0, sticky="w", padx=4, pady=2)
-        self.legend_fontsize = ttk.Spinbox(legend_frame, from_=4, to=20, width=8)
-        self.legend_fontsize.set(8)  # Default font size
-        self.legend_fontsize.grid(row=2, column=1, sticky="w", padx=4, pady=2)
-        
-        ttk.Label(legend_frame, text="Columns:").grid(row=3, column=0, sticky="w", padx=4, pady=2)
-        self.legend_columns = ttk.Spinbox(legend_frame, from_=1, to=5, width=8)
-        self.legend_columns.set(1)  # Default to single column
-        self.legend_columns.grid(row=3, column=1, sticky="w", padx=4, pady=2)
-        
-        self.legend_framealpha_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(legend_frame, text="Semi-transparent", variable=self.legend_framealpha_var).grid(row=4, column=0, columnspan=2, sticky="w", padx=4, pady=2)
-        
-        # Axis labels and title section (adaptive sizing)
-        label_frame = ttk.LabelFrame(mid, text="Graph Labels"); label_frame.pack(side=tk.LEFT, padx=calc_padding, pady=calc_padding//2, fill=tk.Y)
-        
-        ttk.Label(label_frame, text="Graph Title:").grid(row=0, column=0, sticky="w", padx=4, pady=2)
         # Adaptive entry field width
         label_entry_width = max(min(int(screen_width / 50), 25), 18)
-        self.graph_title = ttk.Entry(label_frame, width=label_entry_width)
-        self.graph_title.insert(0, "Sensor Time Series")
-        self.graph_title.grid(row=1, column=0, padx=4, pady=2)
         
-        ttk.Label(label_frame, text="Left Y-axis label:").grid(row=2, column=0, sticky="w", padx=4, pady=2)
-        self.left_ylabel = ttk.Entry(label_frame, width=label_entry_width)
-        self.left_ylabel.insert(0, "Left axis")
-        self.left_ylabel.grid(row=3, column=0, padx=4, pady=2)
+        # Graph labels panel
+        self.graph_labels = GraphLabelsPanel(mid, self, label_entry_width=label_entry_width)
+        self.graph_labels.pack(side=tk.LEFT, padx=calc_padding, pady=calc_padding//2, fill=tk.Y)
         
-        ttk.Label(label_frame, text="Right Y-axis label:").grid(row=4, column=0, sticky="w", padx=4, pady=2)
-        self.right_ylabel = ttk.Entry(label_frame, width=label_entry_width)
-        self.right_ylabel.insert(0, "Right axis")
-        self.right_ylabel.grid(row=5, column=0, padx=4, pady=2)
-        
-        ttk.Label(label_frame, text="X-axis label:").grid(row=6, column=0, sticky="w", padx=4, pady=2)
-        self.xlabel = ttk.Entry(label_frame, width=label_entry_width)
-        self.xlabel.insert(0, "Time")
-        self.xlabel.grid(row=7, column=0, padx=4, pady=2)
+        # Create references for backward compatibility
+        self.graph_title = self.graph_labels.graph_title
+        self.left_ylabel = self.graph_labels.left_ylabel
+        self.right_ylabel = self.graph_labels.right_ylabel
+        self.xlabel = self.graph_labels.xlabel
 
-        time_frame = ttk.LabelFrame(mid, text="Time Window (optional, PST timezone)"); time_frame.pack(side=tk.LEFT, padx=calc_padding, pady=calc_padding//2, fill=tk.Y)
-        ttk.Label(time_frame, text="Start:").grid(row=0, column=0, sticky="e", padx=4, pady=2)
-        ttk.Label(time_frame, text="End:").grid(row=1, column=0, sticky="e", padx=4, pady=2)
-        self.start_entry = ttk.Entry(time_frame, width=label_entry_width); self.start_entry.grid(row=0, column=1, padx=4, pady=2)
-        self.end_entry = ttk.Entry(time_frame, width=label_entry_width); self.end_entry.grid(row=1, column=1, padx=4, pady=2)
+        # Time window panel
+        self.time_window = TimeWindowPanel(
+            mid, self,
+            label_entry_width=label_entry_width,
+            toggle_time_selection_callback=self.toggle_time_selection,
+            clear_time_selection_callback=self.clear_time_selection,
+        )
+        self.time_window.pack(side=tk.LEFT, padx=calc_padding, pady=calc_padding//2, fill=tk.Y)
         
-        # Time selection buttons
-        time_btn_frame = ttk.Frame(time_frame)
-        time_btn_frame.grid(row=2, column=0, columnspan=2, padx=4, pady=6)
-        self.time_select_btn = ttk.Button(time_btn_frame, text="Select Time Range", command=self.toggle_time_selection)
-        self.time_select_btn.pack(side=tk.LEFT, padx=2)
-        ttk.Button(time_btn_frame, text="Clear Selection", command=self.clear_time_selection).pack(side=tk.LEFT, padx=2)
+        # Create references for backward compatibility
+        self.start_entry = self.time_window.start_entry
+        self.end_entry = self.time_window.end_entry
+        self.time_select_btn = self.time_window.time_select_btn
 
         # Plot and customization buttons (adaptive padding)
         plot_customize_frame = ttk.Frame(mid)
@@ -281,72 +239,29 @@ class SensorDashboardApp(tk.Tk):
         ttk.Button(plot_customize_frame, text="Customize Series", command=self.open_customize_dialog).pack(side=tk.LEFT, padx=2)
         ttk.Button(plot_customize_frame, text="Plot", command=self.plot).pack(side=tk.LEFT, padx=2)
 
-        # === CO2 Capture Calculation (in scrollable area) ===
-        calc_frame = ttk.LabelFrame(main_container, text="CO₂ Capture Calculation (No-leak assumption: F_out = F_in)")
-        calc_frame.grid(row=3, column=0, sticky="ew", padx=base_padding, pady=max(base_padding//2, 2))
-        
-        # Column selection for mass balance
-        col_select = ttk.Frame(calc_frame); col_select.pack(side=tk.LEFT, padx=calc_padding, pady=calc_padding//2)
-        
-        ttk.Label(col_select, text="Inlet CO₂ (ppm):").grid(row=0, column=0, sticky="e", padx=4, pady=2)
+        # === CO2 Capture Calculation Panel ===
         # Adaptive combo box width for CO2 calculation
         combo_width = max(min(int(screen_width / 35), 30), 20)
-        self.inlet_co2_combo = ttk.Combobox(col_select, width=combo_width, state="readonly")
-        self.inlet_co2_combo.grid(row=0, column=1, padx=4, pady=2)
         
-        ttk.Label(col_select, text="Outlet CO₂ (ppm):").grid(row=1, column=0, sticky="e", padx=4, pady=2)
-        self.outlet_co2_combo = ttk.Combobox(col_select, width=combo_width, state="readonly")
-        self.outlet_co2_combo.grid(row=1, column=1, padx=4, pady=2)
+        self.co2_panel = CO2CalculationPanel(
+            main_container, self,
+            combo_width=combo_width,
+            on_vm_update=self.update_vm,
+            on_quick_plot=self.quick_plot_co2_sensors,
+            on_calculate=self.calculate_co2_capture,
+        )
+        self.co2_panel.grid(row=3, column=0, sticky="ew", padx=base_padding, pady=max(base_padding//2, 2))
         
-        ttk.Label(col_select, text="Flow Rate (SLPM):").grid(row=2, column=0, sticky="e", padx=4, pady=2)
-        self.inlet_flow_combo = ttk.Combobox(col_select, width=combo_width, state="readonly")
-        self.inlet_flow_combo.grid(row=2, column=1, padx=4, pady=2)
-        
-        # Parameters for Vm calculation
-        param_calc = ttk.Frame(calc_frame); param_calc.pack(side=tk.LEFT, padx=calc_padding, pady=calc_padding//2)
-        
-        ttk.Label(param_calc, text="Temperature (°C):").grid(row=0, column=0, sticky="e", padx=4, pady=2)
-        self.temp_entry = ttk.Entry(param_calc, width=8)
-        self.temp_entry.insert(0, "25")
-        self.temp_entry.grid(row=0, column=1, padx=4, pady=2)
-        self.temp_entry.bind("<KeyRelease>", lambda e: self.update_vm())
-        
-        ttk.Label(param_calc, text="Pressure:").grid(row=1, column=0, sticky="e", padx=4, pady=2)
-        pressure_frame = ttk.Frame(param_calc)
-        pressure_frame.grid(row=1, column=1, sticky="w", padx=4, pady=2)
-        self.pressure_entry = ttk.Entry(pressure_frame, width=8)
-        self.pressure_entry.insert(0, "1.0")
-        self.pressure_entry.pack(side=tk.LEFT, padx=(0, 2))
-        self.pressure_entry.bind("<KeyRelease>", lambda e: self.update_vm())
-        self.pressure_unit_combo = ttk.Combobox(pressure_frame, width=5, state="readonly")
-        self.pressure_unit_combo['values'] = ("atm", "psi")
-        self.pressure_unit_combo.current(0)  # Default to atm
-        self.pressure_unit_combo.pack(side=tk.LEFT)
-        self.pressure_unit_combo.bind("<<ComboboxSelected>>", lambda e: self.update_vm())
-        
-        ttk.Label(param_calc, text="Compressibility (Z):").grid(row=2, column=0, sticky="e", padx=4, pady=2)
-        self.z_entry = ttk.Entry(param_calc, width=8)
-        self.z_entry.insert(0, "1.0")
-        self.z_entry.grid(row=2, column=1, padx=4, pady=2)
-        ttk.Label(param_calc, text="(1.0 for air, ideal)", font=("TkDefaultFont", 7), foreground="gray").grid(row=2, column=2, sticky="w", padx=4, pady=2)
-        self.z_entry.bind("<KeyRelease>", lambda e: self.update_vm())
-        
-        ttk.Label(param_calc, text="Vm (L/mol):", font=("TkDefaultFont", 9, "bold")).grid(row=3, column=0, sticky="e", padx=4, pady=4)
-        self.vm_display = ttk.Label(param_calc, text="24.465", font=("TkDefaultFont", 9, "bold"), foreground="darkblue")
-        self.vm_display.grid(row=3, column=1, sticky="w", padx=4, pady=4)
-        ttk.Label(param_calc, text="(calculated)", font=("TkDefaultFont", 7), foreground="gray").grid(row=3, column=2, sticky="w", padx=4, pady=4)
-        
-        btn_frame = ttk.Frame(param_calc)
-        btn_frame.grid(row=4, column=0, columnspan=3, padx=4, pady=6)
-        ttk.Button(btn_frame, text="Quick Plot Sensors", command=self.quick_plot_co2_sensors).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="Calculate CO₂ Captured", command=self.calculate_co2_capture).pack(side=tk.LEFT, padx=2)
-        
-        # Results display
-        result_frame = ttk.Frame(calc_frame); result_frame.pack(side=tk.LEFT, padx=calc_padding, pady=calc_padding//2)
-        
-        self.co2_result_var = tk.StringVar(value="No calculation yet")
-        result_label = ttk.Label(result_frame, textvariable=self.co2_result_var, font=("TkDefaultFont", 10, "bold"), foreground="darkgreen")
-        result_label.pack(padx=4, pady=4)
+        # Create references for backward compatibility
+        self.inlet_co2_combo = self.co2_panel.inlet_co2_combo
+        self.outlet_co2_combo = self.co2_panel.outlet_co2_combo
+        self.inlet_flow_combo = self.co2_panel.inlet_flow_combo
+        self.temp_entry = self.co2_panel.temp_entry
+        self.pressure_entry = self.co2_panel.pressure_entry
+        self.pressure_unit_combo = self.co2_panel.pressure_unit_combo
+        self.z_entry = self.co2_panel.z_entry
+        self.vm_display = self.co2_panel.vm_display
+        self.co2_result_var = self.co2_panel.co2_result_var
 
         # === Figure area (expands to fill space) ===
         # Calculate figure size adaptively based on window dimensions
@@ -504,11 +419,7 @@ class SensorDashboardApp(tk.Tk):
         """
         return self.column_display_map.get(display_name, display_name)
     
-    def toggle_smooth(self):
-        if self.smooth_var.get():
-            self.window_entry.state(["!disabled"])
-        else:
-            self.window_entry.state(["disabled"])
+    # toggle_smooth is now handled by PlotOptionsPanel
 
     def on_filter_focus_in(self, entry):
         """Clear placeholder text when filter box is focused."""
@@ -685,202 +596,19 @@ class SensorDashboardApp(tk.Tk):
             messagebox.showwarning("No series selected", "Please select at least one series to customize.")
             return
         
-        print(f"[Customize] Opening dialog for {len(all_series)} series")
-        
-        # Create dialog window
-        dialog = tk.Toplevel(self)
-        dialog.title("Customize Series")
-        dialog.geometry("700x600")
-        dialog.transient(self)
-        dialog.grab_set()
-        
-        # Main frame with scrollbar
-        main_frame = ttk.Frame(dialog)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        canvas = tk.Canvas(main_frame)
-        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
-        
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        # Open the customize dialog
+        dialog = SeriesCustomizeDialog(
+            self,
+            all_series,
+            self.series_properties,
+            self.last_series_lines
         )
         
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        updated_properties = dialog.show()
         
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Store widget references for each series
-        series_widgets = {}
-        
-        # Line style and marker options
-        linestyles = ['-', '--', '-.', ':', 'None']
-        markers = ['None', 'o', 's', '^', 'v', '<', '>', 'd', 'p', '*', 'h', 'H', '+', 'x', 'D', '|', '_']
-        
-        # Create customization controls for each series
-        for idx, col in enumerate(all_series):
-            # Start with explicit custom properties if user set any previously
-            props = dict(self.series_properties.get(col, {}))
-
-            # If no explicit customization, try to read from last plotted line
-            if not props:
-                line = None
-                if col in self.last_series_lines.get("left", {}):
-                    line = self.last_series_lines["left"].get(col)
-                if line is None and col in self.last_series_lines.get("right", {}):
-                    line = self.last_series_lines["right"].get(col)
-                if line is not None:
-                    try:
-                        # Extract live properties from the matplotlib Line2D
-                        props = {
-                            'color': line.get_color(),
-                            'linestyle': line.get_linestyle() or '-',
-                            'linewidth': float(line.get_linewidth()),
-                            'marker': line.get_marker() if line.get_marker() not in [None, 'None'] else None,
-                            'markersize': float(line.get_markersize()),
-                        }
-                    except Exception:
-                        props = {}
-
-            # Fallback defaults if anything missing
-            current_color = props.get('color', None)
-            current_linestyle = props.get('linestyle', '-')
-            current_linewidth = props.get('linewidth', 1.5)
-            # If marker was stored as None, show 'None' option in the combobox
-            current_marker = props.get('marker') or 'None'
-            current_markersize = props.get('markersize', 6)
-            
-            # Series frame
-            series_frame = ttk.LabelFrame(scrollable_frame, text=col)
-            series_frame.pack(fill=tk.X, padx=5, pady=5)
-            
-            # Color selection
-            color_frame = ttk.Frame(series_frame)
-            color_frame.grid(row=0, column=0, columnspan=3, sticky="ew", padx=5, pady=3)
-            
-            ttk.Label(color_frame, text="Color:").pack(side=tk.LEFT, padx=5)
-            
-            color_display = tk.Canvas(color_frame, width=40, height=20, bg=current_color if current_color else "white", relief=tk.SUNKEN, bd=1)
-            color_display.pack(side=tk.LEFT, padx=5)
-            
-            color_var = tk.StringVar(value=current_color if current_color else "")
-            
-            def make_choose_color(col_name, color_var, color_display):
-                def choose_color():
-                    color = colorchooser.askcolor(title=f"Choose color for {col_name}")
-                    if color[1]:  # color[1] is hex string
-                        color_var.set(color[1])
-                        color_display.config(bg=color[1])
-                        print(f"[Customize] {col_name}: color set to {color[1]}")
-                return choose_color
-            
-            ttk.Button(color_frame, text="Choose Color", 
-                      command=make_choose_color(col, color_var, color_display)).pack(side=tk.LEFT, padx=5)
-            
-            def make_reset_color(col_name, color_var, color_display):
-                def reset_color():
-                    color_var.set("")
-                    color_display.config(bg="white")
-                    print(f"[Customize] {col_name}: color reset to default")
-                return reset_color
-            
-            ttk.Button(color_frame, text="Auto", 
-                      command=make_reset_color(col, color_var, color_display)).pack(side=tk.LEFT, padx=5)
-            
-            # Line style
-            ttk.Label(series_frame, text="Line Style:").grid(row=1, column=0, sticky="e", padx=5, pady=3)
-            linestyle_combo = ttk.Combobox(series_frame, values=linestyles, width=10, state="readonly")
-            linestyle_combo.set(current_linestyle)
-            linestyle_combo.grid(row=1, column=1, sticky="w", padx=5, pady=3)
-            
-            # Line width
-            ttk.Label(series_frame, text="Line Width:").grid(row=1, column=2, sticky="e", padx=5, pady=3)
-            linewidth_spinbox = ttk.Spinbox(series_frame, from_=0.5, to=10.0, increment=0.5, width=8)
-            linewidth_spinbox.set(current_linewidth)
-            linewidth_spinbox.grid(row=1, column=3, sticky="w", padx=5, pady=3)
-            
-            # Marker style
-            ttk.Label(series_frame, text="Marker:").grid(row=2, column=0, sticky="e", padx=5, pady=3)
-            marker_combo = ttk.Combobox(series_frame, values=markers, width=10, state="readonly")
-            try:
-                marker_combo.set(str(current_marker))
-            except Exception:
-                # Fallback safely if an unexpected value occurs
-                marker_combo.set('None')
-            marker_combo.grid(row=2, column=1, sticky="w", padx=5, pady=3)
-            
-            # Marker size
-            ttk.Label(series_frame, text="Marker Size:").grid(row=2, column=2, sticky="e", padx=5, pady=3)
-            markersize_spinbox = ttk.Spinbox(series_frame, from_=1, to=20, increment=1, width=8)
-            markersize_spinbox.set(current_markersize)
-            markersize_spinbox.grid(row=2, column=3, sticky="w", padx=5, pady=3)
-            
-            # Store widgets
-            series_widgets[col] = {
-                'color_var': color_var,
-                'linestyle': linestyle_combo,
-                'linewidth': linewidth_spinbox,
-                'marker': marker_combo,
-                'markersize': markersize_spinbox
-            }
-        
-        # Button frame at bottom
-        button_frame = ttk.Frame(dialog)
-        button_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        def apply_changes():
-            """Apply customizations to series_properties."""
-            for col, widgets in series_widgets.items():
-                color = widgets['color_var'].get()
-                linestyle = widgets['linestyle'].get()
-                linewidth = float(widgets['linewidth'].get())
-                marker = widgets['marker'].get()
-                markersize = float(widgets['markersize'].get())
-                
-                # Store properties
-                self.series_properties[col] = {
-                    'color': color if color else None,
-                    'linestyle': linestyle,
-                    'linewidth': linewidth,
-                    'marker': marker if marker != 'None' else None,
-                    'markersize': markersize
-                }
-                
-                print(f"[Customize] {col}: color={color if color else 'auto'}, "
-                      f"linestyle={linestyle}, linewidth={linewidth}, "
-                      f"marker={marker}, markersize={markersize}")
-            
-            messagebox.showinfo("Success", f"Customizations applied to {len(series_widgets)} series.\nClick 'Plot' to see changes.")
-            dialog.destroy()
-        
-        def reset_all():
-            """Reset all customizations for selected series."""
-            for col in series_widgets.keys():
-                if col in self.series_properties:
-                    del self.series_properties[col]
-            print(f"[Customize] Reset all customizations for {len(series_widgets)} series")
-            messagebox.showinfo("Reset", "All customizations cleared. Click 'Plot' to see changes.")
-            dialog.destroy()
-        
-        ttk.Button(button_frame, text="Apply", command=apply_changes).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Reset All", command=reset_all).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
-        
-        # Enable mouse wheel scrolling
-        def on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        
-        canvas.bind_all("<MouseWheel>", on_mousewheel)
-        
-        # Cleanup binding when dialog closes
-        def on_close():
-            canvas.unbind_all("<MouseWheel>")
-            dialog.destroy()
-        
-        dialog.protocol("WM_DELETE_WINDOW", on_close)
+        # Update properties if user clicked Apply
+        if updated_properties is not None:
+            self.series_properties = updated_properties
 
     def open_csv(self):
         """Open a CSV or tab-delimited TXT file and populate the listboxes with available columns."""
