@@ -31,6 +31,8 @@ from config import (
 )
 from data_loader import DataLoadError, SensorDataLoader
 from watermark import load_watermark_image
+from plotting import SensorPlotter, HoverTooltipHandler, TimeSelectionHandler
+from plotting.plotter import PlotOptions
 
 
 class SensorDashboardApp(tk.Tk):
@@ -363,19 +365,18 @@ class SensorDashboardApp(tk.Tk):
         self.canvas_widget = self.canvas.get_tk_widget()
         self.canvas_widget.grid(row=2, column=0, sticky="nsew", padx=base_padding, pady=base_padding)
         
-        # Connect mouse click event for time selection
-        self.canvas.mpl_connect('button_press_event', self.on_graph_click)
-        self.time_selection_mode = False
-        self.selected_time_start = None
-        self.selected_time_end = None
-        self.time_selection_lines = []
+        # Initialize plotting components
+        self.plotter = SensorPlotter(self.fig, self.display_tz, self.watermark_image)
+        self.hover_handler = HoverTooltipHandler(self.fig, self.ax_left, self.canvas, self.display_tz)
+        self.time_selector = TimeSelectionHandler(self.ax_left, self.canvas, self.display_tz, self.df, self.time_col)
         
-        # Connect mouse motion event for hover tooltips
-        self.canvas.mpl_connect('motion_notify_event', self.on_graph_hover)
-        self.hover_annotation = None
-        self.hover_vline = None
-        self.hover_hline = None
-        self.hover_points = []  # Store scatter points for each hovered data point
+        # Wire up time selection callbacks to UI
+        self.time_selector.on_mode_changed = self._on_time_selection_mode_changed
+        self.time_selector.on_time_selected = self._on_time_selected
+        self.time_selector.on_status_update = lambda msg: self.status.set(msg)
+        
+        # Link time selection lines to hover handler so they're ignored
+        self.hover_handler.time_selection_lines = self.time_selector.get_selection_lines()
 
         # Initial adaptive control sizing
         try:
@@ -903,6 +904,9 @@ class SensorDashboardApp(tk.Tk):
         self.column_to_display = result.column_to_display
         self.left_selected.clear()
         self.right_selected.clear()
+        
+        # Update time selector with new data
+        self.time_selector.set_data(self.df, self.time_col)
 
         print(
             f"[File Load] Found {len(self.all_columns)} numeric columns in {result.source_path.name}"
@@ -1015,6 +1019,32 @@ class SensorDashboardApp(tk.Tk):
             # If inputs are invalid, show error in display
             self.vm_display.config(text="Error")
     
+    def _on_time_selection_mode_changed(self, mode_active: bool) -> None:
+        """Callback when time selection mode changes.
+        
+        Args:
+            mode_active: True if selection mode is now active
+        """
+        if mode_active:
+            self.time_select_btn.config(text="✓ Selection Active", style="Accent.TButton")
+        else:
+            self.time_select_btn.config(text="Select Time Range")
+    
+    def _on_time_selected(self, start_str: Optional[str], end_str: Optional[str]) -> None:
+        """Callback when time selection points are chosen.
+        
+        Args:
+            start_str: Start time string (or None to clear)
+            end_str: End time string (or None to clear)
+        """
+        self.start_entry.delete(0, tk.END)
+        if start_str:
+            self.start_entry.insert(0, start_str)
+        
+        self.end_entry.delete(0, tk.END)
+        if end_str:
+            self.end_entry.insert(0, end_str)
+    
     def populate_co2_dropdowns(self, columns):
         """Populate the CO₂ capture calculation dropdowns with column names."""
         column_list = [""] + list(columns)
@@ -1056,503 +1086,17 @@ class SensorDashboardApp(tk.Tk):
     
     def toggle_time_selection(self):
         """Toggle time selection mode for graph clicking."""
-        self.time_selection_mode = not self.time_selection_mode
-        
-        if self.time_selection_mode:
-            self.time_select_btn.config(text="✓ Selection Active", style="Accent.TButton")
-            self.status.set("Click on graph to select start time, then click again for end time")
-            print("[Time Selection] Mode ENABLED - Click on graph to select start and end times")
-        else:
-            self.time_select_btn.config(text="Select Time Range")
-            self.status.set("Time selection mode disabled")
-            print("[Time Selection] Mode DISABLED")
+        self.time_selector.toggle_mode()
     
-    def on_graph_click(self, event):
-        """Handle mouse clicks on the graph for time selection."""
-        print(f"[Time Selection DEBUG] Click detected! Event: {event}")
-        print(f"[Time Selection DEBUG] - time_selection_mode: {self.time_selection_mode}")
-        print(f"[Time Selection DEBUG] - event.inaxes: {event.inaxes}")
-        print(f"[Time Selection DEBUG] - self.ax_left: {self.ax_left}")
-        
-        if not self.time_selection_mode:
-            print("[Time Selection DEBUG] Mode is OFF - ignoring click")
-            return
-        
-        # Check if click is inside the plot area
-        if event.inaxes is None:
-            print(f"[Time Selection DEBUG] Click outside plot area - ignoring")
-            return
-        
-        if self.df is None or self.time_col is None:
-            print(f"[Time Selection DEBUG] No data loaded - df: {self.df is not None}, time_col: {self.time_col}")
-            return
-        
-        # Get the x-coordinate (time) of the click
-        clicked_time = event.xdata
-        print(f"[Time Selection DEBUG] - clicked_time (xdata): {clicked_time}")
-        print(f"[Time Selection DEBUG] - clicked_time type: {type(clicked_time)}")
-        
-        # Convert matplotlib date to datetime if needed (this will be in PST since x-axis uses _plot_time)
-        clicked_timestamp = None
-        if isinstance(clicked_time, (int, float)):
-            # If x-axis is datetime, convert from matplotlib date number
-            try:
-                from matplotlib.dates import num2date
-                clicked_datetime = num2date(clicked_time)
-                print(f"[Time Selection DEBUG] - Converted to datetime: {clicked_datetime}")
-                # Convert to pandas timestamp and ensure it's timezone-aware (PST)
-                clicked_timestamp = pd.Timestamp(clicked_datetime)
-                # Localize to PST if naive, or convert to PST if already aware
-                if clicked_timestamp.tzinfo is None:
-                    clicked_timestamp = clicked_timestamp.tz_localize(self.display_tz)
-                else:
-                    clicked_timestamp = clicked_timestamp.tz_convert(self.display_tz)
-                print(f"[Time Selection DEBUG] - Pandas timestamp (PST): {clicked_timestamp}")
-            except Exception as e:
-                print(f"[Time Selection DEBUG] - Conversion error: {e}")
-                import traceback
-                traceback.print_exc()
-                clicked_timestamp = None
-        else:
-            # May already be a datetime object
-            try:
-                clicked_timestamp = pd.Timestamp(clicked_time)
-                if clicked_timestamp.tzinfo is None:
-                    clicked_timestamp = clicked_timestamp.tz_localize(self.display_tz)
-                else:
-                    clicked_timestamp = clicked_timestamp.tz_convert(self.display_tz)
-                print(f"[Time Selection DEBUG] - Direct timestamp conversion (PST): {clicked_timestamp}")
-            except Exception as e:
-                print(f"[Time Selection DEBUG] - Direct conversion error: {e}")
-        
-        if clicked_timestamp is None:
-            print("[Time Selection] ERROR: Could not determine time from click")
-            return
-        
-        # Set start or end time
-        print(f"[Time Selection DEBUG] - selected_time_start: {self.selected_time_start}")
-        print(f"[Time Selection DEBUG] - selected_time_end: {self.selected_time_end}")
-        
-        if self.selected_time_start is None:
-            # First click - set start time
-            print("[Time Selection DEBUG] Setting START time...")
-            self.selected_time_start = clicked_timestamp
-            self.start_entry.delete(0, tk.END)
-            # Display time in PST with timezone info
-            time_str = clicked_timestamp.strftime("%Y-%m-%d %H:%M:%S %Z")
-            self.start_entry.insert(0, time_str)
-            self.status.set(f"Start time set (PST). Now click to select end time.")
-            print(f"[Time Selection] ✓ Start time (PST): {clicked_timestamp}")
-            
-            # Draw vertical line at start
-            self._draw_time_selection_lines()
-            
-        elif self.selected_time_end is None:
-            # Second click - set end time
-            print("[Time Selection DEBUG] Setting END time...")
-            self.selected_time_end = clicked_timestamp
-            self.end_entry.delete(0, tk.END)
-            # Display time in PST with timezone info
-            time_str = clicked_timestamp.strftime("%Y-%m-%d %H:%M:%S %Z")
-            self.end_entry.insert(0, time_str)
-            self.status.set(f"Time range selected (PST). Click 'Calculate CO₂ Captured' to use this range.")
-            print(f"[Time Selection] ✓ End time (PST): {clicked_timestamp}")
-            print(f"[Time Selection] ✓ Range ready (PST): {self.selected_time_start} to {self.selected_time_end}")
-            
-            # Draw both lines and shaded region
-            self._draw_time_selection_lines()
-            
-            # Auto-disable selection mode after both points are selected
-            self.time_selection_mode = False
-            self.time_select_btn.config(text="Select Time Range")
-            print("[Time Selection] Mode auto-disabled after selecting both times")
-        else:
-            # Both already selected - reset and start over
-            print("[Time Selection DEBUG] RESETTING - both times already set")
-            self.selected_time_start = clicked_timestamp
-            self.selected_time_end = None
-            self.start_entry.delete(0, tk.END)
-            time_str = clicked_timestamp.strftime("%Y-%m-%d %H:%M:%S %Z")
-            self.start_entry.insert(0, time_str)
-            self.end_entry.delete(0, tk.END)
-            self.status.set(f"Start time reset (PST). Now click to select end time.")
-            print(f"[Time Selection] ✓ Reset - New start time (PST): {clicked_timestamp}")
-            
-            self._draw_time_selection_lines()
+    # on_graph_click is now handled by TimeSelectionHandler (connected in __init__)
     
-    def _draw_time_selection_lines(self):
-        """Draw vertical lines and shaded region showing selected time range."""
-        print(f"[Time Selection DEBUG] _draw_time_selection_lines called")
-        print(f"[Time Selection DEBUG] - start: {self.selected_time_start}")
-        print(f"[Time Selection DEBUG] - end: {self.selected_time_end}")
-        
-        # Remove old lines
-        for line in self.time_selection_lines:
-            try:
-                line.remove()
-                print(f"[Time Selection DEBUG] - Removed old line/span")
-            except Exception as e:
-                print(f"[Time Selection DEBUG] - Error removing line: {e}")
-        self.time_selection_lines.clear()
-        
-        # Draw new lines
-        try:
-            if self.selected_time_start:
-                print(f"[Time Selection DEBUG] Drawing START line at {self.selected_time_start}")
-                line1 = self.ax_left.axvline(self.selected_time_start, color='green', linestyle='--', linewidth=2, alpha=0.7, label='Start')
-                self.time_selection_lines.append(line1)
-                print(f"[Time Selection DEBUG] ✓ START line drawn")
-            
-            if self.selected_time_end:
-                print(f"[Time Selection DEBUG] Drawing END line at {self.selected_time_end}")
-                line2 = self.ax_left.axvline(self.selected_time_end, color='red', linestyle='--', linewidth=2, alpha=0.7, label='End')
-                self.time_selection_lines.append(line2)
-                print(f"[Time Selection DEBUG] ✓ END line drawn")
-                
-                # Draw shaded region between start and end
-                if self.selected_time_start:
-                    print(f"[Time Selection DEBUG] Drawing SHADED region from {self.selected_time_start} to {self.selected_time_end}")
-                    span = self.ax_left.axvspan(self.selected_time_start, self.selected_time_end, 
-                                              alpha=0.2, color='yellow', label='Selected Range')
-                    self.time_selection_lines.append(span)
-                    print(f"[Time Selection DEBUG] ✓ SHADED region drawn")
-            
-            print(f"[Time Selection DEBUG] Calling canvas.draw()...")
-            self.canvas.draw()
-            print(f"[Time Selection DEBUG] ✓ Canvas redrawn successfully")
-            
-        except Exception as e:
-            print(f"[Time Selection DEBUG] ERROR drawing lines: {e}")
-            import traceback
-            traceback.print_exc()
+    # _draw_time_selection_lines is now handled by TimeSelectionHandler
     
-    def on_graph_hover(self, event):
-        """Handle mouse hover on the graph to display data point values with elegant crosshair and tooltip."""
-        # Only show hover tooltips when not in time selection mode
-        if self.time_selection_mode:
-            self._clear_hover_elements()
-            return
-        
-        # Check if hover is inside the plot area
-        if event.inaxes is None:
-            self._clear_hover_elements()
-            return
-        
-        if self.df is None or self.time_col is None:
-            return
-        
-        try:
-            # Log hover event occasionally (every 50th call to avoid spam)
-            if not hasattr(self, '_hover_call_count'):
-                self._hover_call_count = 0
-            self._hover_call_count += 1
-            log_this_call = (self._hover_call_count % 50 == 1)
-            # Get all plotted lines from both axes
-            left_lines = self.ax_left.get_lines()
-            right_lines = []
-            
-            # Check if right axis exists
-            ax_right = None
-            for ax in self.fig.get_axes():
-                if ax != self.ax_left and hasattr(ax, 'get_ylabel') and ax.get_ylabel():
-                    ax_right = ax
-                    right_lines = ax.get_lines()
-                    break
-            
-            # Skip time selection lines (dashed green/red lines)
-            left_lines = [line for line in left_lines if line not in self.time_selection_lines 
-                         and not (hasattr(line, 'get_linestyle') and line.get_linestyle() == '--' 
-                         and hasattr(line, 'get_color') and line.get_color() in ['green', 'red', 'g', 'r'])]
-            
-            if not left_lines and not right_lines:
-                self._clear_hover_elements()
-                return
-            
-            # Get cursor position
-            cursor_x = event.xdata
-            cursor_y = event.ydata
-            
-            # Convert matplotlib date to pandas timestamp if needed
-            from matplotlib.dates import num2date, date2num
-            cursor_time = None
-            if isinstance(cursor_x, (int, float)):
-                cursor_datetime = num2date(cursor_x)
-                cursor_time = pd.Timestamp(cursor_datetime)
-                if cursor_time.tzinfo is None:
-                    cursor_time = cursor_time.tz_localize(self.display_tz)
-                else:
-                    cursor_time = cursor_time.tz_convert(self.display_tz)
-            
-            # Find nearest data points for all series
-            hover_data = []
-            nearest_x = None
-            min_distance = float('inf')
-            
-            # Check left axis lines
-            for line in left_lines:
-                xdata = line.get_xdata()
-                ydata = line.get_ydata()
-                label = line.get_label()
-                color = line.get_color()
-                
-                if len(xdata) == 0 or label.startswith('_'):
-                    continue
-                
-                # Convert xdata to matplotlib date numbers if needed (handle Timestamp objects)
-                xdata_numeric = xdata
-                if len(xdata) > 0 and isinstance(xdata[0], (pd.Timestamp, np.datetime64)):
-                    xdata_numeric = date2num(xdata)
-                
-                # Find nearest point
-                distances = np.abs(xdata_numeric - cursor_x)
-                idx = np.argmin(distances)
-                
-                if distances[idx] < min_distance:
-                    min_distance = distances[idx]
-                    nearest_x = xdata[idx]
-                
-                # Store data for tooltip
-                hover_data.append({
-                    'label': label,
-                    'x': xdata[idx],
-                    'y': ydata[idx],
-                    'color': color,
-                    'axis': 'left'
-                })
-            
-            # Check right axis lines
-            for line in right_lines:
-                xdata = line.get_xdata()
-                ydata = line.get_ydata()
-                label = line.get_label()
-                color = line.get_color()
-                
-                if len(xdata) == 0 or label.startswith('_'):
-                    continue
-                
-                # Convert xdata to matplotlib date numbers if needed (handle Timestamp objects)
-                xdata_numeric = xdata
-                if len(xdata) > 0 and isinstance(xdata[0], (pd.Timestamp, np.datetime64)):
-                    xdata_numeric = date2num(xdata)
-                
-                # Find nearest point
-                distances = np.abs(xdata_numeric - cursor_x)
-                idx = np.argmin(distances)
-                
-                if distances[idx] < min_distance:
-                    min_distance = distances[idx]
-                    nearest_x = xdata[idx]
-                
-                # Store data for tooltip
-                hover_data.append({
-                    'label': label,
-                    'x': xdata[idx],
-                    'y': ydata[idx],
-                    'color': color,
-                    'axis': 'right'
-                })
-            
-            if not hover_data or nearest_x is None:
-                self._clear_hover_elements()
-                return
-            
-            # Convert nearest_x to matplotlib date number for comparison if needed
-            nearest_x_numeric = nearest_x
-            if isinstance(nearest_x, (pd.Timestamp, np.datetime64)):
-                nearest_x_numeric = date2num(nearest_x)
-            
-            # Only show tooltip if cursor is reasonably close to data
-            xlim = self.ax_left.get_xlim()
-            x_range = xlim[1] - xlim[0]
-            threshold = x_range * 0.02  # Within 2% of x-axis range
-            
-            if min_distance > threshold:
-                self._clear_hover_elements()
-                return
-            
-            # Filter to only show data at the nearest x position
-            # Convert each x value to numeric for comparison
-            filtered_data = []
-            for d in hover_data:
-                x_val_numeric = d['x']
-                if isinstance(x_val_numeric, (pd.Timestamp, np.datetime64)):
-                    x_val_numeric = date2num(x_val_numeric)
-                if abs(x_val_numeric - nearest_x_numeric) < threshold * 0.1:
-                    filtered_data.append(d)
-            hover_data = filtered_data
-            
-            # Clear previous hover elements
-            self._clear_hover_elements()
-            
-            # Draw elegant crosshair at nearest x position (use original value, not numeric)
-            self.hover_vline = self.ax_left.axvline(nearest_x, color='gray', linestyle='-', 
-                                                    linewidth=0.8, alpha=0.5, zorder=100)
-            
-            # Draw marker points on each line at the hover position
-            for data in hover_data:
-                if data['axis'] == 'left':
-                    point = self.ax_left.scatter([data['x']], [data['y']], 
-                                                color=data['color'], s=60, zorder=101,
-                                                edgecolors='white', linewidths=1.5)
-                else:
-                    point = ax_right.scatter([data['x']], [data['y']], 
-                                           color=data['color'], s=60, zorder=101,
-                                           edgecolors='white', linewidths=1.5)
-                self.hover_points.append(point)
-            
-            # Create beautiful tooltip text
-            tooltip_lines = []
-            
-            # Add timestamp - convert nearest_x to proper datetime
-            if isinstance(nearest_x, (pd.Timestamp, np.datetime64)):
-                # Already a timestamp
-                time_pd = pd.Timestamp(nearest_x)
-            else:
-                # It's a matplotlib date number, convert it
-                time_obj = num2date(nearest_x)
-                time_pd = pd.Timestamp(time_obj)
-            
-            # Ensure timezone is set correctly
-            if time_pd.tzinfo is None:
-                time_pd = time_pd.tz_localize(self.display_tz)
-            else:
-                time_pd = time_pd.tz_convert(self.display_tz)
-            
-            time_str = time_pd.strftime('%m/%d/%Y %I:%M:%S %p')
-            tooltip_lines.append(f"Time: {time_str}")
-            tooltip_lines.append("─" * 40)  # Separator
-            
-            # Add each series value with color coding
-            for data in hover_data:
-                # Truncate long labels
-                label = data['label']
-                if len(label) > 45:
-                    label = label[:42] + "..."
-                
-                # Format value with appropriate precision
-                value = data['y']
-                if abs(value) < 0.01 and value != 0:
-                    value_str = f"{value:.6f}"
-                elif abs(value) < 1:
-                    value_str = f"{value:.4f}"
-                elif abs(value) < 100:
-                    value_str = f"{value:.3f}"
-                else:
-                    value_str = f"{value:.2f}"
-                
-                tooltip_lines.append(f"{label}: {value_str}")
-            
-            tooltip_text = "\n".join(tooltip_lines)
-            
-            # Position tooltip smartly (avoid cursor and edge of plot)
-            xlim = self.ax_left.get_xlim()
-            ylim = self.ax_left.get_ylim()
-            
-            # Determine if cursor is on left or right side of plot (use numeric version for comparison)
-            x_relative = (nearest_x_numeric - xlim[0]) / (xlim[1] - xlim[0])
-            y_relative = (cursor_y - ylim[0]) / (ylim[1] - ylim[0])
-            
-            # Position tooltip on opposite side of cursor
-            if x_relative > 0.5:
-                # Cursor on right, put tooltip on left
-                box_x = 0.02
-                ha = 'left'
-            else:
-                # Cursor on left, put tooltip on right
-                box_x = 0.98
-                ha = 'right'
-            
-            if y_relative > 0.5:
-                # Cursor on top, put tooltip on bottom
-                box_y = 0.02
-                va = 'bottom'
-            else:
-                # Cursor on bottom, put tooltip on top
-                box_y = 0.98
-                va = 'top'
-            
-            # Create elegant annotation box
-            bbox_props = dict(
-                boxstyle='round,pad=0.7',
-                facecolor='white',
-                edgecolor='#333333',
-                alpha=0.95,
-                linewidth=1.5
-            )
-            
-            self.hover_annotation = self.ax_left.annotate(
-                tooltip_text,
-                xy=(nearest_x, cursor_y),
-                xytext=(box_x, box_y),
-                textcoords='axes fraction',
-                fontsize=8,
-                fontfamily='monospace',
-                bbox=bbox_props,
-                ha=ha,
-                va=va,
-                zorder=102
-            )
-            
-            # Redraw canvas
-            self.canvas.draw_idle()
-            
-            # Log successful tooltip display occasionally
-            if log_this_call:
-                print(f"[Hover] Tooltip displayed successfully - {len(hover_data)} series at time {time_str}")
-            
-        except Exception as e:
-            print(f"[Hover] Error displaying tooltip: {e}")
-            import traceback
-            traceback.print_exc()
-            self._clear_hover_elements()
-    
-    def _clear_hover_elements(self):
-        """Remove all hover visualization elements from the plot."""
-        try:
-            # Remove annotation
-            if self.hover_annotation is not None:
-                self.hover_annotation.remove()
-                self.hover_annotation = None
-            
-            # Remove vertical line
-            if self.hover_vline is not None:
-                self.hover_vline.remove()
-                self.hover_vline = None
-            
-            # Remove horizontal line
-            if self.hover_hline is not None:
-                self.hover_hline.remove()
-                self.hover_hline = None
-            
-            # Remove scatter points
-            for point in self.hover_points:
-                point.remove()
-            self.hover_points.clear()
-            
-            # Redraw canvas
-            if hasattr(self, 'canvas'):
-                self.canvas.draw_idle()
-        except Exception:
-            pass
+    # on_graph_hover and _clear_hover_elements are now handled by HoverTooltipHandler (connected in __init__)
     
     def clear_time_selection(self):
         """Clear the time selection and remove visual indicators."""
-        self.selected_time_start = None
-        self.selected_time_end = None
-        self.start_entry.delete(0, tk.END)
-        self.end_entry.delete(0, tk.END)
-        
-        # Remove visual indicators
-        for line in self.time_selection_lines:
-            try:
-                line.remove()
-            except:
-                pass
-        self.time_selection_lines.clear()
-        
-        self.canvas.draw()
-        self.status.set("Time selection cleared")
-        print("[Time Selection] Cleared")
+        self.time_selector.clear_selection()
     
     def quick_plot_co2_sensors(self):
         """Quick plot the inlet CO2, outlet CO2, and flow rate sensors selected for calculation."""
@@ -1694,79 +1238,7 @@ class SensorDashboardApp(tk.Tk):
             ),
         )
     
-    def _add_cycle_backgrounds(self, df_plot):
-        """
-        Detect measurement cycles in the 'Time (s)' column and add semi-transparent
-        colored backgrounds for each cycle.
-        
-        A cycle reset is detected when the time decreases (resets to near zero).
-        """
-        # Check if "Time (s)" column exists
-        time_s_col = "Time (s)"
-        if time_s_col not in df_plot.columns:
-            print(f"[Cycle Backgrounds] '{time_s_col}' column not found, skipping cycle backgrounds")
-            return
-        
-        try:
-            # Get the time column and convert to numeric
-            time_values = pd.to_numeric(df_plot[time_s_col], errors='coerce')
-            
-            # Use the x-axis series (either _plot_time or self.time_col)
-            x_series = df_plot['_plot_time'] if '_plot_time' in df_plot.columns else df_plot[self.time_col]
-            
-            # Detect cycle boundaries by finding where time decreases
-            cycle_starts = [0]  # First row is always a cycle start
-            
-            for i in range(1, len(time_values)):
-                # If time decreased or reset to a small value, it's a new cycle
-                if pd.notna(time_values.iloc[i]) and pd.notna(time_values.iloc[i-1]):
-                    if time_values.iloc[i] < time_values.iloc[i-1]:
-                        cycle_starts.append(i)
-            
-            # Add the end of the last cycle
-            cycle_starts.append(len(df_plot))
-            
-            print(f"[Cycle Backgrounds] Detected {len(cycle_starts)-1} measurement cycles")
-            
-            # Generate random colors for each cycle with 15% opacity
-            np.random.seed(42)  # For reproducible colors
-            colors_list = []
-            for i in range(len(cycle_starts) - 1):
-                # Generate random RGB values
-                r = np.random.uniform(0.2, 0.9)
-                g = np.random.uniform(0.2, 0.9)
-                b = np.random.uniform(0.2, 0.9)
-                # Create color with 15% opacity (alpha = 0.15)
-                color = (r, g, b, 0.15)
-                colors_list.append(color)
-            
-            # Add background spans for each cycle
-            for i in range(len(cycle_starts) - 1):
-                start_idx = cycle_starts[i]
-                end_idx = cycle_starts[i + 1] - 1
-                
-                # Get x-values for this cycle
-                x_start = x_series.iloc[start_idx]
-                x_end = x_series.iloc[end_idx]
-                
-                # Add vertical span for this cycle
-                self.ax_left.axvspan(x_start, x_end, 
-                                    facecolor=colors_list[i], 
-                                    edgecolor='none',
-                                    zorder=0)  # Behind everything
-                
-                # Log first few cycles for debugging
-                if i < 3:
-                    print(f"[Cycle Backgrounds] Cycle {i+1}: rows {start_idx}-{end_idx}, "
-                          f"time {time_values.iloc[start_idx]:.1f}s to {time_values.iloc[end_idx]:.1f}s, "
-                          f"color RGB({colors_list[i][0]:.2f}, {colors_list[i][1]:.2f}, {colors_list[i][2]:.2f})")
-            
-            print(f"[Cycle Backgrounds] Added {len(colors_list)} cycle backgrounds with 15% opacity")
-            
-        except Exception as e:
-            print(f"[Cycle Backgrounds] Failed to add cycle backgrounds: {e}")
-            import traceback
-            traceback.print_exc()
+    # _add_cycle_backgrounds is now handled by CycleBackgroundRenderer in the SensorPlotter
     
     def plot(self):
         """Generate the plot based on current selections."""
@@ -1777,272 +1249,95 @@ class SensorDashboardApp(tk.Tk):
         left_cols = self.get_selected(self.left_list, "left")
         right_cols = self.get_selected(self.right_list, "right")
         
-        print(f"[Plot] Selected {len(left_cols)} left axis columns: {left_cols}")
-        print(f"[Plot] Selected {len(right_cols)} right axis columns: {right_cols}")
-        
         if not left_cols and not right_cols:
             messagebox.showwarning("No selection", "Please select at least one series to plot.")
             return
         
-        # Time window filtering (using PST times)
-        df_plot = self.df.copy()
-        start_str = self.start_entry.get().strip()
-        end_str = self.end_entry.get().strip()
-        
-        # Use _plot_time for filtering (which is in PST) instead of self.time_col
-        time_col_to_filter = '_plot_time' if '_plot_time' in df_plot.columns else self.time_col
-        
-        if start_str:
-            try:
-                start_time = pd.to_datetime(start_str)
-                # Ensure timezone-aware comparison (localize to PST if naive)
-                if start_time.tzinfo is None:
-                    start_time = start_time.tz_localize(self.display_tz)
-                print(f"[Plot Filter] Start time (PST): {start_time}")
-                df_plot = df_plot[df_plot[time_col_to_filter] >= start_time]
-            except Exception as e:
-                messagebox.showerror("Invalid start time", f"Could not parse start time:\n{str(e)}")
-                return
-        
-        if end_str:
-            try:
-                end_time = pd.to_datetime(end_str)
-                # Ensure timezone-aware comparison (localize to PST if naive)
-                if end_time.tzinfo is None:
-                    end_time = end_time.tz_localize(self.display_tz)
-                print(f"[Plot Filter] End time (PST): {end_time}")
-                df_plot = df_plot[df_plot[time_col_to_filter] <= end_time]
-            except Exception as e:
-                messagebox.showerror("Invalid end time", f"Could not parse end time:\n{str(e)}")
-                return
-        
-        if df_plot.empty:
-            messagebox.showwarning("No data", "No data in the selected time window.")
-            return
-        
-        # Apply smoothing if requested
+        # Get smoothing parameters
+        smoothing_window = 21
         if self.smooth_var.get():
             try:
-                window = int(self.window_entry.get())
-                if window % 2 == 0:
-                    window += 1  # Make it odd
-                for c in [*left_cols, *right_cols]:
-                    if c in df_plot.columns:
-                        df_plot[c] = pd.to_numeric(df_plot[c], errors="coerce").rolling(window, min_periods=1, center=True).mean()
+                smoothing_window = int(self.window_entry.get())
             except ValueError:
                 messagebox.showerror("Invalid window", "Smoothing window must be a valid integer.")
                 return
         
-        # Clear previous plot
-        self.fig.clear()
-        self.ax_left = self.fig.add_subplot(111)
-        
-        # Add cycle backgrounds if "Time (s)" column exists
-        self._add_cycle_backgrounds(df_plot)
-        
-        # Plot left axis
-        # Reset last-plotted lines tracking
-        self.last_series_lines = {"left": {}, "right": {}}
-
-        for c in left_cols:
-            y = pd.to_numeric(df_plot[c], errors="coerce")
-            
-            # Get custom properties if they exist
-            props = self.series_properties.get(c, {})
-            display_label = self.column_to_display.get(c, self.get_display_name(c))
-            plot_kwargs = {'label': display_label}
-            
-            if props.get('color'):
-                plot_kwargs['color'] = props['color']
-            if 'linestyle' in props:
-                plot_kwargs['linestyle'] = props['linestyle']
-            if 'linewidth' in props:
-                plot_kwargs['linewidth'] = props['linewidth']
-            if props.get('marker'):
-                plot_kwargs['marker'] = props['marker']
-            if 'markersize' in props:
-                plot_kwargs['markersize'] = props['markersize']
-            
-            # Use timezone-adjusted plotting series if present
-            x_series = df_plot['_plot_time'] if '_plot_time' in df_plot.columns else df_plot[self.time_col]
-            line_left, = self.ax_left.plot(x_series, y, **plot_kwargs)
-            # Record last-plotted line for introspection by customize dialog
-            self.last_series_lines["left"][c] = line_left
-            
-            if props:
-                print(f"[Plot] Applied custom properties to '{c}': {props}")
-        
-        # Use custom axis labels
-        x_label = self.xlabel.get().strip() or self.time_col
-        left_y_label = self.left_ylabel.get().strip() or "Left axis"
-        right_y_label = self.right_ylabel.get().strip() or "Right axis"
-        
-        print(f"[Plot] Axis labels - X: '{x_label}', Left Y: '{left_y_label}', Right Y: '{right_y_label}'")
-        
-        self.ax_left.set_xlabel(x_label)
-        self.ax_left.set_ylabel(left_y_label)
-        
-        if self.grid_var.get():
-            self.ax_left.grid(True, which="both", linestyle=":")
-        
-        # Configure x-axis formatter for 12-hour PST
+        # Get legend parameters
         try:
-            locator = mdates.AutoDateLocator()
-            self.ax_left.xaxis.set_major_locator(locator)
-            self.ax_left.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d %I:%M %p', tz=self.display_tz))
+            legend_fontsize = int(self.legend_fontsize.get())
+        except ValueError:
+            legend_fontsize = 8
+        
+        try:
+            legend_columns = int(self.legend_columns.get())
+        except ValueError:
+            legend_columns = 1
+        
+        # Build plot options from UI state
+        options = PlotOptions(
+            show_grid=self.grid_var.get(),
+            apply_smoothing=self.smooth_var.get(),
+            smoothing_window=smoothing_window,
+            show_legend=self.show_legend_var.get(),
+            legend_position=self.legend_position.get(),
+            legend_fontsize=legend_fontsize,
+            legend_columns=legend_columns,
+            legend_framealpha=0.7 if self.legend_framealpha_var.get() else 1.0,
+            graph_title=self.graph_title.get().strip() or "Sensor Time Series",
+            x_label=self.xlabel.get().strip() or self.time_col or "Time",
+            left_y_label=self.left_ylabel.get().strip() or "Left axis",
+            right_y_label=self.right_ylabel.get().strip() or "Right axis",
+            show_watermark=self.watermark_var.get(),
+            start_time=self.start_entry.get().strip() or None,
+            end_time=self.end_entry.get().strip() or None,
+        )
+        
+        # Call the plotter
+        try:
+            self.ax_left = self.plotter.plot(
+                self.df,
+                self.time_col,
+                left_cols,
+                right_cols,
+                options,
+                self.series_properties,
+                self.column_to_display,
+            )
+            
+            # Copy the last series lines reference for the customize dialog
+            self.last_series_lines = self.plotter.last_series_lines
+            
+            # Update hover handler and time selector with new axes
+            self.hover_handler.ax_left = self.ax_left
+            self.hover_handler.time_selection_lines = self.time_selector.get_selection_lines()
+            self.time_selector.ax_left = self.ax_left
+            
+            # Draw the canvas
+            self.canvas.draw()
+            
+            # Update status
+            df_filtered = self.df.copy()
+            if options.start_time or options.end_time:
+                time_col_to_filter = '_plot_time' if '_plot_time' in df_filtered.columns else self.time_col
+                if options.start_time:
+                    start_time = pd.to_datetime(options.start_time)
+                    if start_time.tzinfo is None:
+                        start_time = start_time.tz_localize(self.display_tz)
+                    df_filtered = df_filtered[df_filtered[time_col_to_filter] >= start_time]
+                if options.end_time:
+                    end_time = pd.to_datetime(options.end_time)
+                    if end_time.tzinfo is None:
+                        end_time = end_time.tz_localize(self.display_tz)
+                    df_filtered = df_filtered[df_filtered[time_col_to_filter] <= end_time]
+            
+            self.status.set(f"Plotted {len(left_cols)} left + {len(right_cols)} right series ({len(df_filtered)} points)")
+            
+        except ValueError as e:
+            messagebox.showerror("Plot Error", str(e))
         except Exception as e:
-            print(f"[Time TZ] Could not set 12-hour PST formatter: {e}")
-
-        # Plot right axis
-        ax_right = None
-        if right_cols:
-            ax_right = self.ax_left.twinx()
-            for c in right_cols:
-                y = pd.to_numeric(df_plot[c], errors="coerce")
-                
-                # Get custom properties if they exist
-                props = self.series_properties.get(c, {})
-                display_label = self.column_to_display.get(c, self.get_display_name(c))
-                plot_kwargs = {'label': display_label}
-                
-                # Default to dashed line for right axis if not customized
-                if 'linestyle' in props:
-                    plot_kwargs['linestyle'] = props['linestyle']
-                else:
-                    plot_kwargs['linestyle'] = '--'
-                
-                if props.get('color'):
-                    plot_kwargs['color'] = props['color']
-                if 'linewidth' in props:
-                    plot_kwargs['linewidth'] = props['linewidth']
-                if props.get('marker'):
-                    plot_kwargs['marker'] = props['marker']
-                if 'markersize' in props:
-                    plot_kwargs['markersize'] = props['markersize']
-                
-                x_series = df_plot['_plot_time'] if '_plot_time' in df_plot.columns else df_plot[self.time_col]
-                line_right, = ax_right.plot(x_series, y, **plot_kwargs)
-                # Record last-plotted line for introspection by customize dialog
-                self.last_series_lines["right"][c] = line_right
-                
-                if props:
-                    print(f"[Plot] Applied custom properties to '{c}' (right axis): {props}")
-            
-            ax_right.set_ylabel(right_y_label)
-        
-        # Compose legend with customization options
-        if self.show_legend_var.get():
-            handles_left, labels_left = self.ax_left.get_legend_handles_labels()
-            handles_right, labels_right = (ax_right.get_legend_handles_labels() if ax_right else ([], []))
-            handles = handles_left + handles_right
-            labels = labels_left + labels_right
-            
-            if handles:
-                # Map position names to matplotlib location codes
-                position_map = {
-                    "Upper Left": "upper left",
-                    "Upper Right": "upper right",
-                    "Lower Left": "lower left",
-                    "Lower Right": "lower right",
-                    "Best": "best",
-                    "Outside Right": "center left",
-                    "Outside Bottom": "upper center"
-                }
-                
-                legend_pos = self.legend_position.get()
-                loc = position_map.get(legend_pos, "upper left")
-                
-                # Get legend parameters
-                try:
-                    fontsize = int(self.legend_fontsize.get())
-                except ValueError:
-                    fontsize = 8
-                
-                try:
-                    ncol = int(self.legend_columns.get())
-                except ValueError:
-                    ncol = 1
-                
-                framealpha = 0.7 if self.legend_framealpha_var.get() else 1.0
-                
-                # Handle "outside" positions
-                if legend_pos == "Outside Right":
-                    legend = self.ax_left.legend(handles, labels, loc=loc, bbox_to_anchor=(1.05, 0.5),
-                                                fontsize=fontsize, ncol=ncol, framealpha=framealpha)
-                elif legend_pos == "Outside Bottom":
-                    legend = self.ax_left.legend(handles, labels, loc=loc, bbox_to_anchor=(0.5, -0.15),
-                                                fontsize=fontsize, ncol=ncol, framealpha=framealpha)
-                else:
-                    legend = self.ax_left.legend(handles, labels, loc=loc,
-                                                fontsize=fontsize, ncol=ncol, framealpha=framealpha)
-                
-                print(f"[Plot] Legend: position={legend_pos}, fontsize={fontsize}, columns={ncol}, alpha={framealpha}")
-        else:
-            print(f"[Plot] Legend hidden")
-        
-        # Use custom graph title
-        title = self.graph_title.get().strip() or "Sensor Time Series"
-        self.fig.suptitle(title)
-        print(f"[Plot] Graph title: '{title}'")
-        
-        # Add watermark if available and enabled (top-right, semi-transparent, behind lines)
-        if self.watermark_var.get():
-            try:
-                if self.watermark_image is not None:
-                    # Scale watermark relative to figure size - half the previous size
-                    fig_w, fig_h = self.fig.get_size_inches()
-                    dpi = self.fig.get_dpi()
-                    target_width_px = int(fig_w * dpi * 0.1375)  # ~13.75% of figure width (half of previous)
-                    ratio = target_width_px / max(self.watermark_image.width, 1)
-                    target_height_px = max(int(self.watermark_image.height * ratio), 1)
-                    wm_resized = self.watermark_image.resize((max(target_width_px,1), target_height_px), Image.LANCZOS)
-                    
-                    # Convert to numpy array and modify alpha channel directly
-                    wm_array = np.array(wm_resized, dtype=float) / 255.0  # Normalize to 0-1
-                    if wm_array.shape[-1] == 4:  # Has alpha channel
-                        # Multiply existing alpha by desired opacity (15%)
-                        wm_array[:, :, 3] = wm_array[:, :, 3] * 0.15
-                    else:
-                        # Add alpha channel if not present
-                        alpha = np.ones((wm_array.shape[0], wm_array.shape[1], 1)) * 0.15
-                        wm_array = np.concatenate([wm_array, alpha], axis=2)
-                    
-                    # Create OffsetImage with modified array
-                    imagebox = OffsetImage(wm_array, zoom=1.0)
-                    ab = AnnotationBbox(
-                        imagebox, 
-                        (0.82, 0.88),  # Top-right position within plot area
-                        xycoords='axes fraction', 
-                        frameon=False,
-                        box_alignment=(1.0, 1.0),  # Align box to top-right corner
-                        zorder=0  # Behind data lines
-                    )
-                    # Remove previous
-                    if self.watermark_artist is not None:
-                        try:
-                            self.watermark_artist.remove()
-                        except Exception:
-                            pass
-                    self.watermark_artist = self.ax_left.add_artist(ab)
-                    print(f"[Watermark] Placed watermark at top-right (0.82, 0.88): {target_width_px}x{target_height_px}px, alpha=0.15 (15% opacity), zorder=0")
-            except Exception as e:
-                print(f"[Watermark] Failed to place watermark: {e}")
-                import traceback
-                traceback.print_exc()
-        else:
-            # Remove watermark if checkbox is unchecked
-            if self.watermark_artist is not None:
-                try:
-                    self.watermark_artist.remove()
-                    self.watermark_artist = None
-                    print(f"[Watermark] Watermark disabled by user")
-                except Exception:
-                    pass
-
-        self.fig.tight_layout()
-        self.canvas.draw()
-        
-        self.status.set(f"Plotted {len(left_cols)} left + {len(right_cols)} right series ({len(df_plot)} points)")
+            messagebox.showerror("Plot Error", f"An error occurred while plotting:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
 
 def main() -> None:
     app = SensorDashboardApp()
