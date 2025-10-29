@@ -2,6 +2,7 @@
 
 Detects measurement cycles by analyzing the 'Time (s)' column and adds
 semi-transparent colored backgrounds for visual separation of cycles.
+If a 'Mode' column is present, cycle names are displayed on each background.
 """
 
 from __future__ import annotations
@@ -18,13 +19,15 @@ if TYPE_CHECKING:
 class CycleBackgroundRenderer:
     """Renders colored backgrounds for detected measurement cycles."""
     
-    def __init__(self, time_s_column: str = "Time (s)"):
+    def __init__(self, time_s_column: str = "Time (s)", mode_column: str = "Mode"):
         """Initialize the cycle background renderer.
         
         Args:
             time_s_column: Name of the column containing cycle time in seconds
+            mode_column: Name of the column containing cycle/mode names
         """
         self.time_s_column = time_s_column
+        self.mode_column = mode_column
     
     def add_cycle_backgrounds(
         self,
@@ -35,6 +38,8 @@ class CycleBackgroundRenderer:
         """Detect measurement cycles and add semi-transparent colored backgrounds.
         
         A cycle reset is detected when the time decreases (resets to near zero).
+        If a 'Mode' column exists in the data, the mode name for each cycle is
+        displayed as a label on the background.
         
         Args:
             ax: Matplotlib axes to draw on
@@ -76,7 +81,12 @@ class CycleBackgroundRenderer:
                 color = (r, g, b, 0.15)
                 colors_list.append(color)
             
-            # Add background spans for each cycle
+            # Check if Mode column exists for labeling cycles
+            mode_column_exists = self.mode_column in df_plot.columns
+            if mode_column_exists:
+                print(f"[Cycle Backgrounds] '{self.mode_column}' column found - will display cycle names")
+            
+            # Add background spans and labels for each cycle
             for i in range(len(cycle_starts) - 1):
                 start_idx = cycle_starts[i]
                 end_idx = cycle_starts[i + 1] - 1
@@ -91,13 +101,59 @@ class CycleBackgroundRenderer:
                           edgecolor='none',
                           zorder=0)  # Behind everything
                 
+                # Add mode name label if Mode column exists
+                if mode_column_exists:
+                    # Get the mode name for this cycle (use first non-null value)
+                    mode_name = None
+                    for idx in range(start_idx, end_idx + 1):
+                        if idx < len(df_plot):
+                            value = df_plot[self.mode_column].iloc[idx]
+                            if pd.notna(value) and str(value).strip():
+                                mode_name = str(value).strip()
+                                break
+                    
+                    if mode_name:
+                        # Calculate center position for label
+                        x_center = x_series.iloc[(start_idx + end_idx) // 2]
+                        
+                        # Get y-axis limits to position text
+                        ylim = ax.get_ylim()
+                        y_position = ylim[0] + (ylim[1] - ylim[0]) * 0.98  # Near top of plot
+                        
+                        # Add text annotation with mode name
+                        # Use a contrasting color for readability
+                        text_color = (0.2, 0.2, 0.2, 0.7)  # Dark gray with transparency
+                        ax.text(
+                            x_center, y_position,
+                            mode_name,
+                            fontsize=10,
+                            fontweight='bold',
+                            color=text_color,
+                            ha='center',
+                            va='top',
+                            bbox=dict(
+                                boxstyle='round,pad=0.5',
+                                facecolor='white',
+                                edgecolor='none',
+                                alpha=0.7
+                            ),
+                            zorder=1  # Just above background, below data
+                        )
+                        
+                        # Log mode name for first few cycles
+                        if i < 3:
+                            print(f"[Cycle Backgrounds] Cycle {i+1}: Mode '{mode_name}'")
+                
                 # Log first few cycles for debugging
                 if i < 3:
                     print(f"[Cycle Backgrounds] Cycle {i+1}: rows {start_idx}-{end_idx}, "
                           f"time {time_values.iloc[start_idx]:.1f}s to {time_values.iloc[end_idx]:.1f}s, "
                           f"color RGB({colors_list[i][0]:.2f}, {colors_list[i][1]:.2f}, {colors_list[i][2]:.2f})")
             
-            print(f"[Cycle Backgrounds] Added {len(colors_list)} cycle backgrounds with 15% opacity")
+            if mode_column_exists:
+                print(f"[Cycle Backgrounds] Added {len(colors_list)} cycle backgrounds with mode labels")
+            else:
+                print(f"[Cycle Backgrounds] Added {len(colors_list)} cycle backgrounds with 15% opacity")
             
         except Exception as e:
             print(f"[Cycle Backgrounds] Failed to add cycle backgrounds: {e}")

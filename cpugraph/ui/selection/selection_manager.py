@@ -50,16 +50,27 @@ class SeriesSelectionManager:
         
         print(f"[Selection Manager] Initialized with {len(all_columns)} columns")
     
-    def update_columns(self, all_columns: List[str], column_to_display: Dict[str, str]) -> None:
+    def update_columns(
+        self,
+        all_columns: List[str],
+        column_to_display: Dict[str, str],
+        column_display_map: Dict[str, str] = None,
+    ) -> None:
         """Update the available columns (called when new file is loaded).
         
         Args:
             all_columns: New list of column names
             column_to_display: New display name mapping
+            column_display_map: Optional reverse mapping (display to column names)
         """
         self.all_columns = all_columns
         self.column_to_display = column_to_display
-        self.column_display_map = {v: k for k, v in column_to_display.items()}
+        
+        if column_display_map is not None:
+            self.column_display_map = column_display_map
+        else:
+            self.column_display_map = {v: k for k, v in column_to_display.items()}
+        
         self.left_selected.clear()
         self.right_selected.clear()
         

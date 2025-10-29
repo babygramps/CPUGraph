@@ -493,7 +493,11 @@ class SensorDashboardApp(tk.Tk):
         self.column_to_display = result.column_to_display
         
         # Update selection manager with new columns
-        self.selection_mgr.update_columns(self.all_columns, self.column_to_display)
+        self.selection_mgr.update_columns(
+            self.all_columns,
+            self.column_to_display,
+            self.column_display_map
+        )
         
         # Update time selector with new data
         self.time_selector.set_data(self.df, self.time_col)
