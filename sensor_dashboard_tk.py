@@ -227,6 +227,8 @@ class SensorGrapher(tk.Tk):
         
         self.left_list = tk.Listbox(sel_frame, selectmode=tk.EXTENDED, width=listbox_width, height=10, exportselection=False)
         self.left_list.grid(row=3, column=0, padx=4, pady=2)
+        # Bind click events to update selection tracking immediately
+        self.left_list.bind("<<ListboxSelect>>", lambda e: self.update_selection_tracking("left"))
         
         # Right axis with filter
         ttk.Label(sel_frame, text="Right Y-axis").grid(row=0, column=1, sticky="w", padx=4, pady=2)
@@ -246,6 +248,8 @@ class SensorGrapher(tk.Tk):
         
         self.right_list = tk.Listbox(sel_frame, selectmode=tk.EXTENDED, width=listbox_width, height=10, exportselection=False)
         self.right_list.grid(row=3, column=1, padx=4, pady=2)
+        # Bind click events to update selection tracking immediately
+        self.right_list.bind("<<ListboxSelect>>", lambda e: self.update_selection_tracking("right"))
 
         opt_frame = ttk.LabelFrame(mid, text="Plot Options"); opt_frame.pack(side=tk.LEFT, padx=calc_padding, pady=calc_padding//2, fill=tk.Y)
         self.grid_var = tk.BooleanVar(value=True)
@@ -568,9 +572,38 @@ class SensorGrapher(tk.Tk):
         if not entry.get():
             entry.insert(0, "Filter...")
             entry.config(foreground="gray")
+    
+    def update_selection_tracking(self, side):
+        """Update the selection tracking set when user clicks on listbox items.
+        
+        This ensures selections/deselections are immediately tracked without
+        waiting for the filter to refresh.
+        """
+        if side == "left":
+            listbox = self.left_list
+            selected_set = self.left_selected
+        else:
+            listbox = self.right_list
+            selected_set = self.right_selected
+        
+        # Update tracking with current selections (as display names)
+        selected_set.clear()
+        indices = listbox.curselection()
+        for i in indices:
+            item = listbox.get(i)
+            # Skip separator lines
+            if not item.startswith("─"):
+                selected_set.add(item)
+        
+        # Log selection changes for debugging
+        print(f"[Selection] {side.capitalize()} axis: {len(selected_set)} items selected")
 
     def filter_listbox(self, side):
-        """Filter the listbox based on the search text."""
+        """Filter the listbox based on the search text.
+        
+        Previously selected items always remain visible and selected,
+        even if they don't match the current filter.
+        """
         if not self.all_columns:
             return
         
@@ -593,23 +626,44 @@ class SensorGrapher(tk.Tk):
         if filter_text == "filter...":
             filter_text = ""
         
-        # Clear and repopulate listbox with filtered items
+        # Clear and repopulate listbox
         listbox.delete(0, tk.END)
         
+        # Track items we've already added
+        added_items = set()
+        selected_count = 0
         matched_count = 0
+        
+        # FIRST: Add all previously selected items (always visible)
         for col in self.all_columns:
             display_name = self.column_to_display.get(col, col)
+            if display_name in selected_set:
+                listbox.insert(tk.END, display_name)
+                listbox.selection_set(tk.END)
+                added_items.add(display_name)
+                selected_count += 1
+        
+        # Add separator if we have selected items and a filter is active
+        if selected_count > 0 and filter_text:
+            listbox.insert(tk.END, "─" * 40)
+            added_items.add("─" * 40)
+        
+        # SECOND: Add filtered items (that aren't already selected)
+        for col in self.all_columns:
+            display_name = self.column_to_display.get(col, col)
+            # Skip if already added, or if doesn't match filter
+            if display_name in added_items:
+                continue
             # Filter based on display name (which includes both column name and description)
             if not filter_text or filter_text in display_name.lower():
                 listbox.insert(tk.END, display_name)
                 matched_count += 1
-                # Restore selection if this item was previously selected
-                if display_name in selected_set:
-                    listbox.selection_set(tk.END)
         
         # Log filtering activity
         if filter_text:
-            print(f"[Filter] {side.capitalize()} axis: '{filter_text}' matched {matched_count}/{len(self.all_columns)} columns")
+            print(f"[Filter] {side.capitalize()} axis: '{filter_text}' matched {matched_count} new + {selected_count} selected = {matched_count + selected_count} total items")
+        else:
+            print(f"[Filter] {side.capitalize()} axis: No filter, showing all {len(self.all_columns)} columns ({selected_count} selected)")
 
     def select_all(self, side):
         """Select all visible items in the listbox."""
@@ -620,14 +674,16 @@ class SensorGrapher(tk.Tk):
             listbox = self.right_list
             selected_set = self.right_selected
         
-        # Select all visible items
-        listbox.selection_set(0, tk.END)
-        
-        # Update tracking set
+        # Select all visible items (except separator)
+        count = 0
         for i in range(listbox.size()):
-            selected_set.add(listbox.get(i))
+            item = listbox.get(i)
+            if not item.startswith("─"):
+                listbox.selection_set(i)
+                selected_set.add(item)
+                count += 1
         
-        print(f"[Select All] {side.capitalize()} axis: Selected {listbox.size()} visible columns")
+        print(f"[Select All] {side.capitalize()} axis: Selected {count} visible columns")
 
     def deselect_all(self, side):
         """Deselect all items in the listbox."""
@@ -638,8 +694,9 @@ class SensorGrapher(tk.Tk):
             listbox = self.right_list
             selected_set = self.right_selected
         
-        # Get currently visible items to remove from tracking
-        visible_items = [listbox.get(i) for i in range(listbox.size())]
+        # Get currently visible items to remove from tracking (skip separator)
+        visible_items = [listbox.get(i) for i in range(listbox.size()) 
+                        if not listbox.get(i).startswith("─")]
         
         # Clear selection
         listbox.selection_clear(0, tk.END)
@@ -1081,11 +1138,17 @@ class SensorGrapher(tk.Tk):
         selected_set.clear()
         indices = listbox.curselection()
         for i in indices:
-            selected_set.add(listbox.get(i))
+            item = listbox.get(i)
+            # Skip separator lines
+            if not item.startswith("─"):
+                selected_set.add(item)
         
         # Convert display names to actual column names for plotting
         actual_columns = []
         for display_name in selected_set:
+            # Skip separator lines (safety check)
+            if display_name.startswith("─"):
+                continue
             actual_col = self.column_display_map.get(display_name, display_name)
             actual_columns.append(actual_col)
         
