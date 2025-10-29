@@ -34,17 +34,19 @@ class CycleBackgroundRenderer:
         ax: matplotlib.axes.Axes,
         df_plot: pd.DataFrame,
         x_series: pd.Series,
+        show_mode_labels: bool = True,
     ) -> None:
         """Detect measurement cycles and add semi-transparent colored backgrounds.
         
         A cycle reset is detected when the time decreases (resets to near zero).
-        If a 'Mode' column exists in the data, the mode name for each cycle is
-        displayed as a label on the background.
+        If a 'Mode' column exists in the data and show_mode_labels is True,
+        the mode name for each cycle is displayed as a label on the background.
         
         Args:
             ax: Matplotlib axes to draw on
             df_plot: DataFrame containing the data to plot
             x_series: Series to use for x-axis values (typically time)
+            show_mode_labels: Whether to display mode labels on cycle backgrounds
         """
         # Check if "Time (s)" column exists
         if self.time_s_column not in df_plot.columns:
@@ -83,8 +85,10 @@ class CycleBackgroundRenderer:
             
             # Check if Mode column exists for labeling cycles
             mode_column_exists = self.mode_column in df_plot.columns
-            if mode_column_exists:
+            if mode_column_exists and show_mode_labels:
                 print(f"[Cycle Backgrounds] '{self.mode_column}' column found - will display cycle names")
+            elif mode_column_exists and not show_mode_labels:
+                print(f"[Cycle Backgrounds] '{self.mode_column}' column found - mode labels disabled by user")
             
             # Add background spans and labels for each cycle
             for i in range(len(cycle_starts) - 1):
@@ -101,8 +105,8 @@ class CycleBackgroundRenderer:
                           edgecolor='none',
                           zorder=0)  # Behind everything
                 
-                # Add mode name label if Mode column exists
-                if mode_column_exists:
+                # Add mode name label if Mode column exists AND user wants to see labels
+                if mode_column_exists and show_mode_labels:
                     # Get the mode name for this cycle (use first non-null value)
                     mode_name = None
                     for idx in range(start_idx, end_idx + 1):
@@ -150,7 +154,7 @@ class CycleBackgroundRenderer:
                           f"time {time_values.iloc[start_idx]:.1f}s to {time_values.iloc[end_idx]:.1f}s, "
                           f"color RGB({colors_list[i][0]:.2f}, {colors_list[i][1]:.2f}, {colors_list[i][2]:.2f})")
             
-            if mode_column_exists:
+            if mode_column_exists and show_mode_labels:
                 print(f"[Cycle Backgrounds] Added {len(colors_list)} cycle backgrounds with mode labels")
             else:
                 print(f"[Cycle Backgrounds] Added {len(colors_list)} cycle backgrounds with 15% opacity")
