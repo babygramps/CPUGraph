@@ -55,6 +55,8 @@ class HoverTooltipHandler:
         
         # Connect mouse motion event
         self.canvas.mpl_connect('motion_notify_event', self.on_graph_hover)
+        # Connect axes leave event to clear hover when mouse leaves
+        self.canvas.mpl_connect('axes_leave_event', self._on_axes_leave)
     
     def set_time_selection_lines(self, lines: List[Any]) -> None:
         """Set which lines should be ignored (time selection indicators).
@@ -212,8 +214,8 @@ class HoverTooltipHandler:
                     filtered_data.append(d)
             hover_data = filtered_data
             
-            # Clear previous hover elements
-            self._clear_hover_elements()
+            # Clear previous hover elements (without redrawing - we'll redraw once after adding new ones)
+            self._clear_hover_elements(redraw=False)
             
             # Draw elegant crosshair at nearest x position
             self.hover_vline = self.ax_left.axvline(nearest_x, color='gray', linestyle='-', 
@@ -224,12 +226,15 @@ class HoverTooltipHandler:
                 if data['axis'] == 'left':
                     point = self.ax_left.scatter([data['x']], [data['y']], 
                                                 color=data['color'], s=60, zorder=101,
-                                                edgecolors='white', linewidths=1.5)
-                else:
+                                                edgecolors='white', linewidths=1.5,
+                                                picker=False)  # Disable picking to avoid event conflicts
+                    self.hover_points.append(point)
+                elif ax_right is not None:
                     point = ax_right.scatter([data['x']], [data['y']], 
                                            color=data['color'], s=60, zorder=101,
-                                           edgecolors='white', linewidths=1.5)
-                self.hover_points.append(point)
+                                           edgecolors='white', linewidths=1.5,
+                                           picker=False)  # Disable picking to avoid event conflicts
+                    self.hover_points.append(point)
             
             # Create beautiful tooltip text
             tooltip_lines = []
@@ -317,12 +322,15 @@ class HoverTooltipHandler:
                 zorder=102
             )
             
-            # Redraw canvas
-            self.canvas.draw_idle()
+            # Redraw canvas to show new hover elements
+            try:
+                self.canvas.draw_idle()
+            except Exception as e:
+                print(f"[Hover] Error redrawing canvas: {e}")
             
             # Log successful tooltip display occasionally
             if log_this_call:
-                print(f"[Hover] Tooltip displayed successfully - {len(hover_data)} series at time {time_str}")
+                print(f"[Hover] Tooltip displayed - {len(hover_data)} series, {len(self.hover_points)} points at time {time_str}")
             
         except Exception as e:
             print(f"[Hover] Error displaying tooltip: {e}")
@@ -330,34 +338,73 @@ class HoverTooltipHandler:
             traceback.print_exc()
             self._clear_hover_elements()
     
-    def _clear_hover_elements(self) -> None:
-        """Remove all hover visualization elements from the plot."""
+    def _clear_hover_elements(self, redraw: bool = True) -> None:
+        """Remove all hover visualization elements from the plot.
+        
+        Args:
+            redraw: Whether to redraw the canvas after clearing (default True)
+        """
+        elements_removed = 0
+        
         try:
             # Remove annotation
             if self.hover_annotation is not None:
-                self.hover_annotation.remove()
+                try:
+                    self.hover_annotation.remove()
+                    elements_removed += 1
+                except Exception as e:
+                    print(f"[Hover Clear] Failed to remove annotation: {e}")
                 self.hover_annotation = None
             
             # Remove vertical line
             if self.hover_vline is not None:
-                self.hover_vline.remove()
+                try:
+                    self.hover_vline.remove()
+                    elements_removed += 1
+                except Exception as e:
+                    print(f"[Hover Clear] Failed to remove vline: {e}")
                 self.hover_vline = None
             
             # Remove horizontal line
             if self.hover_hline is not None:
-                self.hover_hline.remove()
+                try:
+                    self.hover_hline.remove()
+                    elements_removed += 1
+                except Exception as e:
+                    print(f"[Hover Clear] Failed to remove hline: {e}")
                 self.hover_hline = None
             
-            # Remove scatter points
-            for point in self.hover_points:
-                point.remove()
-            self.hover_points.clear()
+            # Remove scatter points - ensure they're actually removed
+            points_to_remove = len(self.hover_points)
+            if self.hover_points:
+                for i, point in enumerate(self.hover_points):
+                    try:
+                        point.remove()
+                        elements_removed += 1
+                    except Exception as e:
+                        print(f"[Hover Clear] Failed to remove point {i}: {e}")
+                self.hover_points.clear()
             
-            # Redraw canvas
-            if hasattr(self, 'canvas'):
-                self.canvas.draw_idle()
-        except Exception:
-            pass
+            # Log clearing activity (throttled)
+            if elements_removed > 0 and self._hover_call_count % 50 == 1:
+                print(f"[Hover Clear] Removed {elements_removed} elements ({points_to_remove} scatter points)")
+            
+            # Force canvas redraw only if we removed something and redraw is requested
+            if redraw and elements_removed > 0 and hasattr(self, 'canvas') and self.canvas is not None:
+                try:
+                    self.canvas.draw_idle()
+                except Exception as e:
+                    print(f"[Hover Clear] Failed to redraw canvas: {e}")
+        except Exception as e:
+            print(f"[Hover Clear] Unexpected error: {e}")
+    
+    def _on_axes_leave(self, event: Any) -> None:
+        """Handle mouse leaving the axes area.
+        
+        Args:
+            event: Matplotlib axes leave event
+        """
+        self._clear_hover_elements()
     
     def clear(self) -> None:
         """Public method to clear hover elements."""
