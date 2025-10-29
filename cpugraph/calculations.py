@@ -184,6 +184,43 @@ class RHCalculator:
         else:
             self.display_timezone = display_timezone
 
+    @staticmethod
+    def calculate_rh_series(temperature_c: pd.Series, dewpoint_c: pd.Series) -> pd.Series:
+        """Calculate relative humidity for a series of temperature and dew point values.
+        
+        Uses the Magnus-Tetens formula:
+        RH = 100 × exp((17.625 × Td) / (243.04 + Td)) / exp((17.625 × T) / (243.04 + T))
+        
+        Args:
+            temperature_c: Series of air temperatures in Celsius
+            dewpoint_c: Series of dew point temperatures in Celsius
+            
+        Returns:
+            Series of relative humidity values in percent (0-100)
+        """
+        # Convert to numeric and handle NaN
+        temp_c = pd.to_numeric(temperature_c, errors="coerce")
+        dew_c = pd.to_numeric(dewpoint_c, errors="coerce")
+        
+        # Magnus-Tetens constants
+        a = 17.625
+        b = 243.04  # °C
+        
+        # Calculate saturation vapor pressures
+        e_dewpoint = np.exp((a * dew_c) / (b + dew_c))
+        e_temp = np.exp((a * temp_c) / (b + temp_c))
+        
+        # Relative humidity (%)
+        rh_percent = 100.0 * (e_dewpoint / e_temp)
+        
+        # Clamp to valid range [0, 100] and set invalid values to NaN
+        rh_percent = rh_percent.clip(0.0, 100.0)
+        
+        # Set RH to NaN where dew point > temperature (physically impossible)
+        rh_percent = rh_percent.where(dew_c <= temp_c, np.nan)
+        
+        return rh_percent
+
     def calculate(
         self,
         df: pd.DataFrame,

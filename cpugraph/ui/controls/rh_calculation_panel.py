@@ -24,6 +24,7 @@ class RHCalculationPanel:
         combo_width: int = 25,
         on_quick_plot: Callable[[], None] = None,
         on_calculate: Callable[[], None] = None,
+        on_plot_rh: Callable[[], None] = None,
     ):
         """Initialize the RH calculation panel.
         
@@ -33,10 +34,12 @@ class RHCalculationPanel:
             combo_width: Width of combo boxes
             on_quick_plot: Callback for quick plot button
             on_calculate: Callback for calculate button
+            on_plot_rh: Callback for plot RH time series button
         """
         self.app = app
         self.on_quick_plot = on_quick_plot
         self.on_calculate = on_calculate
+        self.on_plot_rh = on_plot_rh
         
         self.frame = ttk.LabelFrame(
             parent,
@@ -65,6 +68,19 @@ class RHCalculationPanel:
         self.dewpoint_combo = ttk.Combobox(col_select, width=combo_width, state="readonly")
         self.dewpoint_combo.grid(row=1, column=1, padx=4, pady=4)
         
+        # Pressure transmitter (optional)
+        ttk.Label(col_select, text="Pressure (optional):").grid(
+            row=2, column=0, sticky="e", padx=4, pady=4
+        )
+        self.pressure_combo = ttk.Combobox(col_select, width=combo_width, state="readonly")
+        self.pressure_combo.grid(row=2, column=1, padx=4, pady=4)
+        ttk.Label(
+            col_select,
+            text="(for reference/logging)",
+            font=("TkDefaultFont", 7),
+            foreground="gray"
+        ).grid(row=2, column=2, sticky="w", padx=2, pady=4)
+        
         # Middle: Buttons
         btn_frame = ttk.Frame(main_container)
         btn_frame.pack(side=tk.LEFT, padx=10, pady=4)
@@ -73,15 +89,22 @@ class RHCalculationPanel:
             btn_frame,
             text="📊 Quick Plot",
             command=self._on_quick_plot_clicked,
-            width=15
-        ).pack(pady=4)
+            width=16
+        ).pack(pady=3)
         
         ttk.Button(
             btn_frame,
-            text="🧮 Calculate RH",
+            text="📈 Plot RH Line",
+            command=self._on_plot_rh_clicked,
+            width=16
+        ).pack(pady=3)
+        
+        ttk.Button(
+            btn_frame,
+            text="🧮 Calculate Stats",
             command=self._on_calculate_clicked,
-            width=15
-        ).pack(pady=4)
+            width=16
+        ).pack(pady=3)
         
         # Right side: Results display
         result_container = ttk.Frame(main_container)
@@ -119,6 +142,11 @@ class RHCalculationPanel:
         """Handle quick plot button click."""
         if self.on_quick_plot:
             self.on_quick_plot()
+    
+    def _on_plot_rh_clicked(self) -> None:
+        """Handle plot RH line button click."""
+        if self.on_plot_rh:
+            self.on_plot_rh()
     
     def _on_calculate_clicked(self) -> None:
         """Handle calculate button click."""

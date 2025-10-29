@@ -277,12 +277,14 @@ class SensorDashboardApp(tk.Tk):
             combo_width=combo_width,
             on_quick_plot=self.quick_plot_rh_sensors,
             on_calculate=self.calculate_relative_humidity,
+            on_plot_rh=self.plot_rh_time_series,
         )
         self.rh_panel.grid(row=4, column=0, sticky="ew", padx=base_padding, pady=max(base_padding//2, 2))
         
         # Create references for backward compatibility
         self.temp_combo = self.rh_panel.temp_combo
         self.dewpoint_combo = self.rh_panel.dewpoint_combo
+        self.pressure_rh_combo = self.rh_panel.pressure_combo
         self.rh_result_var = self.rh_panel.rh_result_var
 
         # === Figure area (expands to fill space) ===
@@ -387,7 +389,7 @@ class SensorDashboardApp(tk.Tk):
                     pass
 
         # Comboboxes in CO2 calc and RH calc
-        for w_name in ['inlet_co2_combo', 'outlet_co2_combo', 'inlet_flow_combo', 'temp_combo', 'dewpoint_combo']:
+        for w_name in ['inlet_co2_combo', 'outlet_co2_combo', 'inlet_flow_combo', 'temp_combo', 'dewpoint_combo', 'pressure_rh_combo']:
             w = getattr(self, w_name, None)
             if w is not None:
                 try:
@@ -685,16 +687,19 @@ class SensorDashboardApp(tk.Tk):
         print(f"[CO2 Calc] Dropdowns populated with {len(columns)} columns (no-leak assumption)")
     
     def populate_rh_dropdowns(self, columns):
-        """Populate the RH calculation dropdowns with temperature and dew point transmitters."""
+        """Populate the RH calculation dropdowns with temperature, dew point, and pressure transmitters."""
         column_list = [""] + list(columns)
 
         self.temp_combo["values"] = column_list
         self.dewpoint_combo["values"] = column_list
+        self.pressure_rh_combo["values"] = column_list
 
         temp_selected = False
         dewpoint_selected = False
+        pressure_selected = False
 
-        # Auto-select temperature transmitters (TT) and dew point transmitters (AT with DEW POINT)
+        # Auto-select temperature transmitters (TT), dew point transmitters (AT with DEW POINT), 
+        # and pressure transmitters (PT)
         for column in columns:
             upper_name = column.upper()
             
@@ -710,8 +715,15 @@ class SensorDashboardApp(tk.Tk):
                 self.dewpoint_combo.set(column)
                 dewpoint_selected = True
             
-            # Break early if both are selected
-            if temp_selected and dewpoint_selected:
+            # Look for pressure transmitters (PT)
+            if not pressure_selected and "PT-" in upper_name and "PRESSURE" in upper_name:
+                # Prefer certain pressure sensors (e.g., air supply, system pressure)
+                if any(keyword in upper_name for keyword in ["AIR SUPPLY", "SUPPLY", "SYSTEM"]):
+                    self.pressure_rh_combo.set(column)
+                    pressure_selected = True
+            
+            # Break early if all are selected
+            if temp_selected and dewpoint_selected and pressure_selected:
                 break
         
         # If no specific match, try broader patterns
@@ -730,15 +742,25 @@ class SensorDashboardApp(tk.Tk):
                     self.dewpoint_combo.set(column)
                     dewpoint_selected = True
                     break
+        
+        if not pressure_selected:
+            for column in columns:
+                upper_name = column.upper()
+                if "PT-" in upper_name:
+                    self.pressure_rh_combo.set(column)
+                    pressure_selected = True
+                    break
 
         print(f"[RH Calc] Dropdowns populated with {len(columns)} columns")
         if temp_selected:
             print(f"[RH Calc] Auto-selected temperature: {self.temp_combo.get()}")
         if dewpoint_selected:
             print(f"[RH Calc] Auto-selected dew point: {self.dewpoint_combo.get()}")
+        if pressure_selected:
+            print(f"[RH Calc] Auto-selected pressure: {self.pressure_rh_combo.get()}")
     
     def quick_plot_rh_sensors(self):
-        """Quick plot the temperature and dew point transmitters selected for RH calculation."""
+        """Quick plot the temperature, dew point, and pressure transmitters selected for RH calculation."""
         if self.df is None:
             messagebox.showwarning("No data", "Please load a CSV file first.")
             return
@@ -746,10 +768,11 @@ class SensorDashboardApp(tk.Tk):
         # Get selected columns for RH calculation
         temp_col = self.temp_combo.get()
         dewpoint_col = self.dewpoint_combo.get()
+        pressure_col = self.pressure_rh_combo.get()
         
-        # Validate at least one column is selected
+        # Validate at least temperature and dew point are selected
         if not any([temp_col, dewpoint_col]):
-            messagebox.showwarning("No sensors selected", "Please select at least one sensor (temperature or dew point) to plot.")
+            messagebox.showwarning("No sensors selected", "Please select at least temperature or dew point sensor to plot.")
             return
         
         print(f"[Quick Plot] Plotting RH calculation sensors...")
@@ -759,22 +782,37 @@ class SensorDashboardApp(tk.Tk):
         self.right_list.selection_clear(0, tk.END)
         self.selection_mgr.clear_selections()
         
-        # Add both sensors to left axis
-        count = 0
+        # Add temperature and dew point to left axis
+        count_left = 0
         for i in range(self.left_list.size()):
             display_name = self.left_list.get(i)
             actual_col = self.column_display_map.get(display_name, display_name)
             if actual_col in [temp_col, dewpoint_col] and actual_col:
                 self.left_list.selection_set(i)
                 self.selection_mgr.left_selected.add(display_name)
-                count += 1
+                count_left += 1
         
-        print(f"[Quick Plot] Selected {count} RH sensors (left axis)")
+        # Add pressure to right axis if selected
+        count_right = 0
+        if pressure_col:
+            for i in range(self.right_list.size()):
+                display_name = self.right_list.get(i)
+                actual_col = self.column_display_map.get(display_name, display_name)
+                if actual_col == pressure_col:
+                    self.right_list.selection_set(i)
+                    self.selection_mgr.right_selected.add(display_name)
+                    count_right += 1
+                    break
         
-        # Auto-set axis label for clarity
+        print(f"[Quick Plot] Selected {count_left} temp/dew point sensors (left) and {count_right} pressure sensor (right)")
+        
+        # Auto-set axis labels for clarity
         if temp_col or dewpoint_col:
             self.left_ylabel.delete(0, tk.END)
             self.left_ylabel.insert(0, "Temperature (°C)")
+        if pressure_col:
+            self.right_ylabel.delete(0, tk.END)
+            self.right_ylabel.insert(0, "Pressure")
         
         # Call plot method
         self.plot()
@@ -788,6 +826,7 @@ class SensorDashboardApp(tk.Tk):
         # Get selected columns
         temp_col = self.temp_combo.get()
         dewpoint_col = self.dewpoint_combo.get()
+        pressure_col = self.pressure_rh_combo.get()
 
         # Validate selections
         if not all([temp_col, dewpoint_col]):
@@ -816,6 +855,31 @@ class SensorDashboardApp(tk.Tk):
                 messagebox.showerror("Calculation Error", message)
             return
 
+        # Calculate pressure statistics if pressure transmitter is selected
+        pressure_stats = None
+        if pressure_col:
+            # Filter data by time window if specified
+            df_filtered = self.df.copy()
+            if start_str or end_str:
+                if start_str:
+                    start_time = pd.to_datetime(start_str)
+                    if start_time.tzinfo is None:
+                        start_time = start_time.tz_localize(self.display_tz)
+                    df_filtered = df_filtered[df_filtered[time_column] >= start_time]
+                if end_str:
+                    end_time = pd.to_datetime(end_str)
+                    if end_time.tzinfo is None:
+                        end_time = end_time.tz_localize(self.display_tz)
+                    df_filtered = df_filtered[df_filtered[time_column] <= end_time]
+            
+            pressure_data = pd.to_numeric(df_filtered[pressure_col], errors="coerce").dropna()
+            if len(pressure_data) > 0:
+                pressure_stats = {
+                    'avg': pressure_data.mean(),
+                    'min': pressure_data.min(),
+                    'max': pressure_data.max(),
+                }
+
         # Format detailed result for display
         result_text = (
             f"Average RH: {result.average_rh_percent:.1f}%\n"
@@ -827,25 +891,188 @@ class SensorDashboardApp(tk.Tk):
         print(f"\n[RH Calc] ========================================")
         print(f"[RH Calc] Temperature: {temp_col}")
         print(f"[RH Calc] Dew Point: {dewpoint_col}")
+        if pressure_col:
+            print(f"[RH Calc] Pressure: {pressure_col}")
         print(f"[RH Calc] Time span: {result.time_span_minutes:.2f} min")
         print(f"[RH Calc] Data points: {result.data_points}")
         print(f"[RH Calc] Avg temperature: {result.average_temperature_c:.1f}°C")
         print(f"[RH Calc] Avg dew point: {result.average_dewpoint_c:.1f}°C")
+        if pressure_stats:
+            print(f"[RH Calc] Avg pressure: {pressure_stats['avg']:.2f} (range: {pressure_stats['min']:.2f} - {pressure_stats['max']:.2f})")
         print(f"[RH Calc] AVERAGE RH: {result.average_rh_percent:.1f}%")
         print(f"[RH Calc] Min RH: {result.min_rh_percent:.1f}%")
         print(f"[RH Calc] Max RH: {result.max_rh_percent:.1f}%")
         print(f"[RH Calc] ========================================\n")
 
-        messagebox.showinfo(
-            "Calculation Complete",
-            (
-                f"Relative Humidity Calculated\n\n"
-                f"Average RH: {result.average_rh_percent:.1f}%\n"
-                f"Range: {result.min_rh_percent:.1f}% - {result.max_rh_percent:.1f}%\n\n"
-                f"Based on {result.data_points} data points over {result.time_span_minutes:.1f} minutes\n\n"
-                f"Check console for detailed breakdown."
-            ),
+        message_text = (
+            f"Relative Humidity Calculated\n\n"
+            f"Average RH: {result.average_rh_percent:.1f}%\n"
+            f"Range: {result.min_rh_percent:.1f}% - {result.max_rh_percent:.1f}%\n\n"
+            f"Based on {result.data_points} data points over {result.time_span_minutes:.1f} minutes"
         )
+        
+        if pressure_stats:
+            message_text += f"\n\nAverage Pressure: {pressure_stats['avg']:.2f}"
+        
+        message_text += "\n\nCheck console for detailed breakdown."
+        
+        messagebox.showinfo("Calculation Complete", message_text)
+    
+    def plot_rh_time_series(self):
+        """Calculate RH time series, add it as a column, and plot it."""
+        if self.df is None:
+            messagebox.showwarning("No data", "Please load a CSV file first.")
+            return
+
+        # Get selected columns
+        temp_col = self.temp_combo.get()
+        dewpoint_col = self.dewpoint_combo.get()
+        pressure_col = self.pressure_rh_combo.get()
+
+        # Validate selections
+        if not all([temp_col, dewpoint_col]):
+            messagebox.showwarning("Incomplete selection", "Please select both temperature and dew point transmitters.")
+            return
+
+        print(f"\n[RH Plot] ========================================")
+        print(f"[RH Plot] Calculating RH time series...")
+        print(f"[RH Plot] Temperature: {temp_col}")
+        print(f"[RH Plot] Dew Point: {dewpoint_col}")
+        if pressure_col:
+            print(f"[RH Plot] Pressure: {pressure_col} (for reference)")
+
+        try:
+            # Calculate RH for all timestamps
+            rh_series = RHCalculator.calculate_rh_series(
+                self.df[temp_col],
+                self.df[dewpoint_col]
+            )
+            
+            # Create column name for the calculated RH
+            # Extract sensor IDs for a clean name
+            temp_id = temp_col.split('-')[1] if '-' in temp_col else "T"
+            dew_id = dewpoint_col.split('-')[1] if '-' in dewpoint_col else "D"
+            rh_column_name = f"RH_CALCULATED_{temp_id}_{dew_id}"
+            
+            # Check if this RH column already exists
+            if rh_column_name in self.df.columns:
+                print(f"[RH Plot] Updating existing RH column: {rh_column_name}")
+            else:
+                print(f"[RH Plot] Creating new RH column: {rh_column_name}")
+            
+            # Add RH series to dataframe
+            self.df[rh_column_name] = rh_series
+            
+            # Check if column is already in all_columns list
+            if rh_column_name not in self.all_columns:
+                self.all_columns.append(rh_column_name)
+                
+                # Create display name with description
+                display_name = f"{rh_column_name} - Relative Humidity (%)"
+                self.column_to_display[rh_column_name] = display_name
+                self.column_display_map[display_name] = rh_column_name
+                
+                # Add to listboxes
+                self.left_list.insert(tk.END, display_name)
+                self.right_list.insert(tk.END, display_name)
+                
+                print(f"[RH Plot] Added '{display_name}' to listboxes")
+            
+            # Update selection manager
+            self.selection_mgr.update_columns(
+                self.all_columns,
+                self.column_to_display,
+                self.column_display_map
+            )
+            
+            # Calculate statistics
+            valid_rh = rh_series.dropna()
+            if len(valid_rh) > 0:
+                avg_rh = valid_rh.mean()
+                min_rh = valid_rh.min()
+                max_rh = valid_rh.max()
+                valid_points = len(valid_rh)
+                
+                print(f"[RH Plot] Valid data points: {valid_points}")
+                print(f"[RH Plot] Average RH: {avg_rh:.1f}%")
+                print(f"[RH Plot] Range: {min_rh:.1f}% - {max_rh:.1f}%")
+                
+                # Update result display
+                result_text = (
+                    f"RH Time Series Created\n"
+                    f"Average: {avg_rh:.1f}%\n"
+                    f"Range: {min_rh:.1f}% - {max_rh:.1f}%"
+                )
+                self.rh_result_var.set(result_text)
+            else:
+                print(f"[RH Plot] Warning: No valid RH data points")
+                self.rh_result_var.set("No valid RH data")
+            
+            print(f"[RH Plot] ========================================\n")
+            
+            # Now plot the RH line along with source sensors
+            # Clear current selections
+            self.left_list.selection_clear(0, tk.END)
+            self.right_list.selection_clear(0, tk.END)
+            self.selection_mgr.clear_selections()
+            
+            # Add temperature and dew point to left axis
+            count_left = 0
+            for i in range(self.left_list.size()):
+                display_name = self.left_list.get(i)
+                actual_col = self.column_display_map.get(display_name, display_name)
+                if actual_col in [temp_col, dewpoint_col]:
+                    self.left_list.selection_set(i)
+                    self.selection_mgr.left_selected.add(display_name)
+                    count_left += 1
+            
+            # Add calculated RH and optionally pressure to right axis
+            count_right = 0
+            rh_display_name = self.column_to_display[rh_column_name]
+            for i in range(self.right_list.size()):
+                display_name = self.right_list.get(i)
+                actual_col = self.column_display_map.get(display_name, display_name)
+                # Add RH series
+                if display_name == rh_display_name:
+                    self.right_list.selection_set(i)
+                    self.selection_mgr.right_selected.add(display_name)
+                    count_right += 1
+                # Add pressure if selected
+                elif pressure_col and actual_col == pressure_col:
+                    self.right_list.selection_set(i)
+                    self.selection_mgr.right_selected.add(display_name)
+                    count_right += 1
+            
+            print(f"[RH Plot] Auto-selected {count_left} temperature sensors (left) and {count_right} series on right (RH{' + pressure' if pressure_col else ''})")
+            
+            # Set axis labels
+            self.left_ylabel.delete(0, tk.END)
+            self.left_ylabel.insert(0, "Temperature (°C)")
+            self.right_ylabel.delete(0, tk.END)
+            if pressure_col:
+                self.right_ylabel.insert(0, "RH (%) / Pressure")
+            else:
+                self.right_ylabel.insert(0, "Relative Humidity (%)")
+            
+            # Plot
+            self.plot()
+            
+            messagebox.showinfo(
+                "RH Plot Created",
+                (
+                    f"Relative humidity time series has been calculated and plotted!\n\n"
+                    f"Column: {rh_column_name}\n"
+                    f"Average RH: {avg_rh:.1f}%\n"
+                    f"Range: {min_rh:.1f}% - {max_rh:.1f}%\n\n"
+                    f"The RH series is now available in the sensor lists for future plots."
+                )
+            )
+            
+        except Exception as exc:
+            print(f"[RH Plot] Error: {exc}")
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("Plot Error", f"Failed to calculate RH time series:\n{str(exc)}")
     
     def toggle_time_selection(self):
         """Toggle time selection mode for graph clicking."""
