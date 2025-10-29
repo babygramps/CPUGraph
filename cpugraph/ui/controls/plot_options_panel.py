@@ -44,7 +44,7 @@ class PlotOptionsPanel:
         # Smoothing window entry
         ttk.Label(self.frame, text="Window (samples):").grid(row=2, column=0, sticky="w", padx=4, pady=2)
         self.window_entry = ttk.Entry(self.frame, width=8)
-        self.window_entry.insert(0, "21")
+        self.window_entry.insert(0, "15")
         self.window_entry.grid(row=2, column=1, sticky="w", padx=4, pady=2)
         self.window_entry.state(["disabled"])
         

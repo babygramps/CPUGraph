@@ -54,32 +54,42 @@ class RHCalculationPanel:
         col_select = ttk.Frame(main_container)
         col_select.pack(side=tk.LEFT, padx=6, pady=4)
         
-        # Temperature transmitter
-        ttk.Label(col_select, text="Temperature (°C):").grid(
+        # Presets dropdown
+        ttk.Label(col_select, text="Quick Presets:").grid(
             row=0, column=0, sticky="e", padx=4, pady=4
         )
+        self.preset_combo = ttk.Combobox(col_select, width=combo_width, state="readonly")
+        self.preset_combo['values'] = ("-- Select Preset --", "Compressed Air", "Contactor")
+        self.preset_combo.current(0)
+        self.preset_combo.grid(row=0, column=1, padx=4, pady=4)
+        self.preset_combo.bind("<<ComboboxSelected>>", self._on_preset_selected)
+        
+        # Temperature transmitter
+        ttk.Label(col_select, text="Temperature (°C):").grid(
+            row=1, column=0, sticky="e", padx=4, pady=4
+        )
         self.temp_combo = ttk.Combobox(col_select, width=combo_width, state="readonly")
-        self.temp_combo.grid(row=0, column=1, padx=4, pady=4)
+        self.temp_combo.grid(row=1, column=1, padx=4, pady=4)
         
         # Dew point transmitter
         ttk.Label(col_select, text="Dew Point (°C):").grid(
-            row=1, column=0, sticky="e", padx=4, pady=4
+            row=2, column=0, sticky="e", padx=4, pady=4
         )
         self.dewpoint_combo = ttk.Combobox(col_select, width=combo_width, state="readonly")
-        self.dewpoint_combo.grid(row=1, column=1, padx=4, pady=4)
+        self.dewpoint_combo.grid(row=2, column=1, padx=4, pady=4)
         
         # Pressure transmitter (optional)
         ttk.Label(col_select, text="Pressure (optional):").grid(
-            row=2, column=0, sticky="e", padx=4, pady=4
+            row=3, column=0, sticky="e", padx=4, pady=4
         )
         self.pressure_combo = ttk.Combobox(col_select, width=combo_width, state="readonly")
-        self.pressure_combo.grid(row=2, column=1, padx=4, pady=4)
+        self.pressure_combo.grid(row=3, column=1, padx=4, pady=4)
         ttk.Label(
             col_select,
             text="(for reference/logging)",
             font=("TkDefaultFont", 7),
             foreground="gray"
-        ).grid(row=2, column=2, sticky="w", padx=2, pady=4)
+        ).grid(row=3, column=2, sticky="w", padx=2, pady=4)
         
         # Middle: Buttons
         btn_frame = ttk.Frame(main_container)
@@ -137,6 +147,16 @@ class RHCalculationPanel:
             font=("TkDefaultFont", 7),
             foreground="gray"
         ).pack(side=tk.BOTTOM, pady=(0, 4))
+    
+    def _on_preset_selected(self, event=None) -> None:
+        """Handle preset selection."""
+        preset = self.preset_combo.get()
+        if preset == "-- Select Preset --":
+            return
+        
+        # Notify the app to apply the preset
+        if hasattr(self.app, 'apply_rh_preset'):
+            self.app.apply_rh_preset(preset)
     
     def _on_quick_plot_clicked(self) -> None:
         """Handle quick plot button click."""

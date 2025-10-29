@@ -914,6 +914,93 @@ class SensorDashboardApp(tk.Tk):
         if pressure_selected:
             print(f"[RH Calc] Auto-selected pressure: {self.pressure_rh_combo.get()}")
     
+    def apply_rh_preset(self, preset_name: str):
+        """Apply a predefined RH sensor preset.
+        
+        Args:
+            preset_name: Name of the preset ("Compressed Air" or "Contactor")
+        """
+        print(f"\n[RH Preset] ========================================")
+        print(f"[RH Preset] Applying preset: {preset_name}")
+        
+        # Define presets with sensor IDs
+        presets = {
+            "Compressed Air": {
+                "temp": "TT-1006",
+                "dewpoint": "AT-1007",
+                "pressure": "PT-1102",
+            },
+            "Contactor": {
+                "temp": "TT-1302",
+                "dewpoint": "AT-1002",
+                "pressure": None,
+            },
+        }
+        
+        if preset_name not in presets:
+            print(f"[RH Preset] Unknown preset: {preset_name}")
+            return
+        
+        preset = presets[preset_name]
+        
+        # Find matching columns
+        temp_col = None
+        dewpoint_col = None
+        pressure_col = None
+        
+        for column in self.all_columns:
+            upper_name = column.upper()
+            
+            # Match temperature
+            if preset["temp"] and preset["temp"] in upper_name:
+                temp_col = column
+                print(f"[RH Preset] Found temperature: {column}")
+            
+            # Match dew point
+            if preset["dewpoint"] and preset["dewpoint"] in upper_name:
+                dewpoint_col = column
+                print(f"[RH Preset] Found dew point: {column}")
+            
+            # Match pressure
+            if preset["pressure"] and preset["pressure"] in upper_name:
+                pressure_col = column
+                print(f"[RH Preset] Found pressure: {column}")
+        
+        # Set the combo boxes
+        if temp_col:
+            self.temp_combo.set(temp_col)
+        else:
+            print(f"[RH Preset] Warning: Could not find temperature sensor {preset['temp']}")
+            messagebox.showwarning(
+                "Sensor Not Found",
+                f"Could not find temperature sensor {preset['temp']} in the loaded data."
+            )
+        
+        if dewpoint_col:
+            self.dewpoint_combo.set(dewpoint_col)
+        else:
+            print(f"[RH Preset] Warning: Could not find dew point sensor {preset['dewpoint']}")
+            messagebox.showwarning(
+                "Sensor Not Found",
+                f"Could not find dew point sensor {preset['dewpoint']} in the loaded data."
+            )
+        
+        if preset["pressure"]:
+            if pressure_col:
+                self.pressure_rh_combo.set(pressure_col)
+            else:
+                print(f"[RH Preset] Warning: Could not find pressure sensor {preset['pressure']}")
+                # Don't show warning for pressure since it's optional
+                self.pressure_rh_combo.set("")
+        else:
+            self.pressure_rh_combo.set("")
+        
+        print(f"[RH Preset] Preset '{preset_name}' applied successfully")
+        print(f"[RH Preset] ========================================\n")
+        
+        # Update status
+        self.status.set(f"Applied RH preset: {preset_name}")
+    
     def quick_plot_rh_sensors(self):
         """Quick plot the temperature, dew point, and pressure transmitters selected for RH calculation."""
         if self.df is None:

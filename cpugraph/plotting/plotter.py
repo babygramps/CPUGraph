@@ -30,7 +30,7 @@ class PlotOptions:
         # Grid and smoothing
         show_grid: bool = True,
         apply_smoothing: bool = False,
-        smoothing_window: int = 21,
+        smoothing_window: int = 15,
         
         # Legend options
         show_legend: bool = True,
