@@ -20,7 +20,12 @@ from PIL import Image
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
-from calculations import CO2CalculationError, CO2CaptureCalculator
+from calculations import (
+    CO2CalculationError,
+    CO2CaptureCalculator,
+    RHCalculationError,
+    RHCalculator,
+)
 from config import (
     DEFAULT_FLOW_SENSORS,
     DEFAULT_INLET_SENSORS,
@@ -41,6 +46,7 @@ from ui.controls import (
     GraphLabelsPanel,
     TimeWindowPanel,
     CO2CalculationPanel,
+    RHCalculationPanel,
 )
 from ui.selection import SeriesSelectionManager
 
@@ -116,6 +122,7 @@ class SensorDashboardApp(tk.Tk):
         self.sensor_descriptions = SENSOR_DESCRIPTIONS
         self.data_loader = SensorDataLoader(sensor_descriptions=self.sensor_descriptions, display_timezone=self.display_tz)
         self.co2_calculator = CO2CaptureCalculator(display_timezone=self.display_tz)
+        self.rh_calculator = RHCalculator(display_timezone=self.display_tz)
 
         # === Main container with grid ===
         main_container = ttk.Frame(self)
@@ -264,6 +271,20 @@ class SensorDashboardApp(tk.Tk):
         self.vm_display = self.co2_panel.vm_display
         self.co2_result_var = self.co2_panel.co2_result_var
 
+        # === Relative Humidity Calculation Panel ===
+        self.rh_panel = RHCalculationPanel(
+            main_container, self,
+            combo_width=combo_width,
+            on_quick_plot=self.quick_plot_rh_sensors,
+            on_calculate=self.calculate_relative_humidity,
+        )
+        self.rh_panel.grid(row=4, column=0, sticky="ew", padx=base_padding, pady=max(base_padding//2, 2))
+        
+        # Create references for backward compatibility
+        self.temp_combo = self.rh_panel.temp_combo
+        self.dewpoint_combo = self.rh_panel.dewpoint_combo
+        self.rh_result_var = self.rh_panel.rh_result_var
+
         # === Figure area (expands to fill space) ===
         # Calculate figure size adaptively based on window dimensions
         # Figure dimensions are approximate - the canvas will scale with window resize
@@ -365,8 +386,8 @@ class SensorDashboardApp(tk.Tk):
                 except Exception:
                     pass
 
-        # Comboboxes in CO2 calc
-        for w_name in ['inlet_co2_combo', 'outlet_co2_combo', 'inlet_flow_combo']:
+        # Comboboxes in CO2 calc and RH calc
+        for w_name in ['inlet_co2_combo', 'outlet_co2_combo', 'inlet_flow_combo', 'temp_combo', 'dewpoint_combo']:
             w = getattr(self, w_name, None)
             if w is not None:
                 try:
@@ -542,6 +563,7 @@ class SensorDashboardApp(tk.Tk):
         )
 
         self.populate_co2_dropdowns(self.all_columns)
+        self.populate_rh_dropdowns(self.all_columns)
     
     def get_selected(self, listbox, side):
         """Get selected items from a listbox (delegates to SelectionManager).
@@ -661,6 +683,169 @@ class SensorDashboardApp(tk.Tk):
                 flow_selected = True
 
         print(f"[CO2 Calc] Dropdowns populated with {len(columns)} columns (no-leak assumption)")
+    
+    def populate_rh_dropdowns(self, columns):
+        """Populate the RH calculation dropdowns with temperature and dew point transmitters."""
+        column_list = [""] + list(columns)
+
+        self.temp_combo["values"] = column_list
+        self.dewpoint_combo["values"] = column_list
+
+        temp_selected = False
+        dewpoint_selected = False
+
+        # Auto-select temperature transmitters (TT) and dew point transmitters (AT with DEW POINT)
+        for column in columns:
+            upper_name = column.upper()
+            
+            # Look for temperature transmitters (TT)
+            if not temp_selected and "TT-" in upper_name and "TEMP" in upper_name:
+                # Prefer certain temperature sensors (e.g., gas delivery, ambient)
+                if any(keyword in upper_name for keyword in ["DELIVERY", "AMBIENT", "AIR", "GAS ENTRANCE"]):
+                    self.temp_combo.set(column)
+                    temp_selected = True
+            
+            # Look for dew point transmitters (AT with DEW POINT)
+            if not dewpoint_selected and "AT-" in upper_name and "DEW" in upper_name:
+                self.dewpoint_combo.set(column)
+                dewpoint_selected = True
+            
+            # Break early if both are selected
+            if temp_selected and dewpoint_selected:
+                break
+        
+        # If no specific match, try broader patterns
+        if not temp_selected:
+            for column in columns:
+                upper_name = column.upper()
+                if "TT-" in upper_name:
+                    self.temp_combo.set(column)
+                    temp_selected = True
+                    break
+        
+        if not dewpoint_selected:
+            for column in columns:
+                upper_name = column.upper()
+                if "DEW" in upper_name and "POINT" in upper_name:
+                    self.dewpoint_combo.set(column)
+                    dewpoint_selected = True
+                    break
+
+        print(f"[RH Calc] Dropdowns populated with {len(columns)} columns")
+        if temp_selected:
+            print(f"[RH Calc] Auto-selected temperature: {self.temp_combo.get()}")
+        if dewpoint_selected:
+            print(f"[RH Calc] Auto-selected dew point: {self.dewpoint_combo.get()}")
+    
+    def quick_plot_rh_sensors(self):
+        """Quick plot the temperature and dew point transmitters selected for RH calculation."""
+        if self.df is None:
+            messagebox.showwarning("No data", "Please load a CSV file first.")
+            return
+        
+        # Get selected columns for RH calculation
+        temp_col = self.temp_combo.get()
+        dewpoint_col = self.dewpoint_combo.get()
+        
+        # Validate at least one column is selected
+        if not any([temp_col, dewpoint_col]):
+            messagebox.showwarning("No sensors selected", "Please select at least one sensor (temperature or dew point) to plot.")
+            return
+        
+        print(f"[Quick Plot] Plotting RH calculation sensors...")
+        
+        # Clear current selections
+        self.left_list.selection_clear(0, tk.END)
+        self.right_list.selection_clear(0, tk.END)
+        self.selection_mgr.clear_selections()
+        
+        # Add both sensors to left axis
+        count = 0
+        for i in range(self.left_list.size()):
+            display_name = self.left_list.get(i)
+            actual_col = self.column_display_map.get(display_name, display_name)
+            if actual_col in [temp_col, dewpoint_col] and actual_col:
+                self.left_list.selection_set(i)
+                self.selection_mgr.left_selected.add(display_name)
+                count += 1
+        
+        print(f"[Quick Plot] Selected {count} RH sensors (left axis)")
+        
+        # Auto-set axis label for clarity
+        if temp_col or dewpoint_col:
+            self.left_ylabel.delete(0, tk.END)
+            self.left_ylabel.insert(0, "Temperature (°C)")
+        
+        # Call plot method
+        self.plot()
+    
+    def calculate_relative_humidity(self):
+        """Calculate relative humidity from temperature and dew point using Magnus-Tetens formula."""
+        if self.df is None:
+            messagebox.showwarning("No data", "Please load a CSV file first.")
+            return
+
+        # Get selected columns
+        temp_col = self.temp_combo.get()
+        dewpoint_col = self.dewpoint_combo.get()
+
+        # Validate selections
+        if not all([temp_col, dewpoint_col]):
+            messagebox.showwarning("Incomplete selection", "Please select both temperature and dew point transmitters.")
+            return
+
+        time_column = "_plot_time" if "_plot_time" in self.df.columns else self.time_col
+        start_str = self.start_entry.get().strip() or None
+        end_str = self.end_entry.get().strip() or None
+
+        try:
+            result = self.rh_calculator.calculate(
+                self.df,
+                time_column=time_column,
+                temperature_column=temp_col,
+                dewpoint_column=dewpoint_col,
+                start_time=start_str,
+                end_time=end_str,
+            )
+        except RHCalculationError as exc:
+            message = str(exc)
+            print(f"[RH Calc] Error: {message}")
+            if "No data" in message:
+                messagebox.showwarning("Calculation Error", message)
+            else:
+                messagebox.showerror("Calculation Error", message)
+            return
+
+        # Format detailed result for display
+        result_text = (
+            f"Average RH: {result.average_rh_percent:.1f}%\n"
+            f"Range: {result.min_rh_percent:.1f}% - {result.max_rh_percent:.1f}%\n"
+            f"Data points: {result.data_points}"
+        )
+        self.rh_result_var.set(result_text)
+
+        print(f"\n[RH Calc] ========================================")
+        print(f"[RH Calc] Temperature: {temp_col}")
+        print(f"[RH Calc] Dew Point: {dewpoint_col}")
+        print(f"[RH Calc] Time span: {result.time_span_minutes:.2f} min")
+        print(f"[RH Calc] Data points: {result.data_points}")
+        print(f"[RH Calc] Avg temperature: {result.average_temperature_c:.1f}°C")
+        print(f"[RH Calc] Avg dew point: {result.average_dewpoint_c:.1f}°C")
+        print(f"[RH Calc] AVERAGE RH: {result.average_rh_percent:.1f}%")
+        print(f"[RH Calc] Min RH: {result.min_rh_percent:.1f}%")
+        print(f"[RH Calc] Max RH: {result.max_rh_percent:.1f}%")
+        print(f"[RH Calc] ========================================\n")
+
+        messagebox.showinfo(
+            "Calculation Complete",
+            (
+                f"Relative Humidity Calculated\n\n"
+                f"Average RH: {result.average_rh_percent:.1f}%\n"
+                f"Range: {result.min_rh_percent:.1f}% - {result.max_rh_percent:.1f}%\n\n"
+                f"Based on {result.data_points} data points over {result.time_span_minutes:.1f} minutes\n\n"
+                f"Check console for detailed breakdown."
+            ),
+        )
     
     def toggle_time_selection(self):
         """Toggle time selection mode for graph clicking."""

@@ -10,6 +10,7 @@ from .legend_options_panel import LegendOptionsPanel
 from .graph_labels_panel import GraphLabelsPanel
 from .time_window_panel import TimeWindowPanel
 from .co2_calculation_panel import CO2CalculationPanel
+from .rh_calculation_panel import RHCalculationPanel
 
 __all__ = [
     "SeriesSelector",
@@ -18,5 +19,6 @@ __all__ = [
     "GraphLabelsPanel",
     "TimeWindowPanel",
     "CO2CalculationPanel",
+    "RHCalculationPanel",
 ]
 
