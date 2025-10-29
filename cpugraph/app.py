@@ -217,6 +217,7 @@ class SensorDashboardApp(tk.Tk):
         self.smooth_var = self.plot_options.smooth_var
         self.window_entry = self.plot_options.window_entry
         self.watermark_var = self.plot_options.watermark_var
+        self.cycle_backgrounds_var = self.plot_options.cycle_backgrounds_var
         self.mode_labels_var = self.plot_options.mode_labels_var
         
         # Legend options panel
@@ -1431,6 +1432,7 @@ class SensorDashboardApp(tk.Tk):
             left_y_label=self.left_ylabel.get().strip() or "Left axis",
             right_y_label=self.right_ylabel.get().strip() or "Right axis",
             show_watermark=self.watermark_var.get(),
+            show_cycle_backgrounds=self.cycle_backgrounds_var.get(),
             show_mode_labels=self.mode_labels_var.get(),
             start_time=self.start_entry.get().strip() or None,
             end_time=self.end_entry.get().strip() or None,

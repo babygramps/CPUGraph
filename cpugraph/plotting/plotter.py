@@ -45,8 +45,9 @@ class PlotOptions:
         left_y_label: str = "Left axis",
         right_y_label: str = "Right axis",
         
-        # Watermark and mode labels
+        # Watermark, cycle backgrounds, and mode labels
         show_watermark: bool = True,
+        show_cycle_backgrounds: bool = True,
         show_mode_labels: bool = True,
         
         # Time window (timezone-aware timestamps or strings)
@@ -69,6 +70,7 @@ class PlotOptions:
             left_y_label: Left Y-axis label
             right_y_label: Right Y-axis label
             show_watermark: Whether to show watermark
+            show_cycle_backgrounds: Whether to show colored backgrounds for measurement cycles
             show_mode_labels: Whether to show mode/cycle labels on cycle backgrounds
             start_time: Start time for filtering (optional)
             end_time: End time for filtering (optional)
@@ -86,6 +88,7 @@ class PlotOptions:
         self.left_y_label = left_y_label
         self.right_y_label = right_y_label
         self.show_watermark = show_watermark
+        self.show_cycle_backgrounds = show_cycle_backgrounds
         self.show_mode_labels = show_mode_labels
         self.start_time = start_time
         self.end_time = end_time
@@ -163,7 +166,11 @@ class SensorPlotter:
         
         # Add cycle backgrounds if "Time (s)" column exists
         # This returns cycle info for adding labels after layout is finalized
-        cycle_info_list = self.cycle_renderer.add_cycle_backgrounds(ax_left, df_plot, x_series, options.show_mode_labels)
+        cycle_info_list = self.cycle_renderer.add_cycle_backgrounds(
+            ax_left, df_plot, x_series, 
+            options.show_cycle_backgrounds, 
+            options.show_mode_labels
+        )
         
         # Reset last-plotted lines tracking
         self.last_series_lines = {"left": {}, "right": {}}

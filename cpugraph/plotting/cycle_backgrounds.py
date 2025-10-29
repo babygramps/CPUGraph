@@ -34,6 +34,7 @@ class CycleBackgroundRenderer:
         ax: matplotlib.axes.Axes,
         df_plot: pd.DataFrame,
         x_series: pd.Series,
+        show_backgrounds: bool = True,
         show_mode_labels: bool = True,
     ) -> list:
         """Detect measurement cycles and add semi-transparent colored backgrounds.
@@ -46,11 +47,17 @@ class CycleBackgroundRenderer:
             ax: Matplotlib axes to draw on
             df_plot: DataFrame containing the data to plot
             x_series: Series to use for x-axis values (typically time)
+            show_backgrounds: Whether to show colored background spans
             show_mode_labels: Whether mode labels should be added (passed to label method)
             
         Returns:
             List of cycle information dicts for adding labels later, or empty list
         """
+        # Check if backgrounds are disabled
+        if not show_backgrounds:
+            print(f"[Cycle Backgrounds] Cycle backgrounds disabled by user")
+            return []
+        
         # Check if "Time (s)" column exists
         if self.time_s_column not in df_plot.columns:
             print(f"[Cycle Backgrounds] '{self.time_s_column}' column not found, skipping cycle backgrounds")

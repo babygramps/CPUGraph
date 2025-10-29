@@ -55,12 +55,19 @@ class PlotOptionsPanel:
             variable=self.watermark_var
         ).grid(row=3, column=0, columnspan=2, sticky="w", padx=4, pady=2)
         
+        # Cycle backgrounds checkbox
+        self.cycle_backgrounds_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            self.frame, text="Show cycle backgrounds",
+            variable=self.cycle_backgrounds_var
+        ).grid(row=4, column=0, columnspan=2, sticky="w", padx=4, pady=2)
+        
         # Mode labels checkbox
         self.mode_labels_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             self.frame, text="Show mode labels",
             variable=self.mode_labels_var
-        ).grid(row=4, column=0, columnspan=2, sticky="w", padx=4, pady=2)
+        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=4, pady=2)
     
     def _toggle_smooth(self) -> None:
         """Enable/disable smoothing window entry based on checkbox."""
