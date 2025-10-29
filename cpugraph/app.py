@@ -20,8 +20,8 @@ from PIL import Image
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
-from .calculations import CO2CalculationError, CO2CaptureCalculator
-from .config import (
+from calculations import CO2CalculationError, CO2CaptureCalculator
+from config import (
     DEFAULT_FLOW_SENSORS,
     DEFAULT_INLET_SENSORS,
     DEFAULT_LEFT_AXIS_SENSORS,
@@ -29,8 +29,8 @@ from .config import (
     DISPLAY_TZ_NAME,
     SENSOR_DESCRIPTIONS,
 )
-from .data_loader import DataLoadError, SensorDataLoader
-from .watermark import load_watermark_image
+from data_loader import DataLoadError, SensorDataLoader
+from watermark import load_watermark_image
 
 
 class SensorDashboardApp(tk.Tk):

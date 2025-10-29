@@ -9,7 +9,7 @@ from typing import Dict, Iterable, List, Tuple
 import pandas as pd
 from dateutil import tz
 
-from .config import DISPLAY_TZ_NAME, SENSOR_DESCRIPTIONS
+from config import DISPLAY_TZ_NAME, SENSOR_DESCRIPTIONS
 
 
 class DataLoadError(Exception):
@@ -33,7 +33,17 @@ class SensorDataLoader:
 
     def __init__(self, *, sensor_descriptions: Dict[str, str] | None = None, display_timezone: str | tz.tzfile | None = None) -> None:
         self.sensor_descriptions = sensor_descriptions or SENSOR_DESCRIPTIONS
-        self.display_timezone = tz.gettz(display_timezone or DISPLAY_TZ_NAME)
+        # Handle both string timezone names and tzfile objects
+        if display_timezone is None:
+            self.display_timezone = tz.gettz(DISPLAY_TZ_NAME)
+            print(f"[DataLoader Init] Using default timezone: {DISPLAY_TZ_NAME}")
+        elif isinstance(display_timezone, str):
+            self.display_timezone = tz.gettz(display_timezone)
+            print(f"[DataLoader Init] Using timezone from string: {display_timezone}")
+        else:
+            # Already a timezone object
+            self.display_timezone = display_timezone
+            print(f"[DataLoader Init] Using timezone object: {display_timezone}")
 
     def load(self, path: str | Path) -> DataLoadResult:
         """Load the given data file and return a structured result."""
