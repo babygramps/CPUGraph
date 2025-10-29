@@ -35,23 +35,26 @@ class CycleBackgroundRenderer:
         df_plot: pd.DataFrame,
         x_series: pd.Series,
         show_mode_labels: bool = True,
-    ) -> None:
+    ) -> list:
         """Detect measurement cycles and add semi-transparent colored backgrounds.
         
         A cycle reset is detected when the time decreases (resets to near zero).
-        If a 'Mode' column exists in the data and show_mode_labels is True,
-        the mode name for each cycle is displayed as a label on the background.
+        This method adds the background spans but returns cycle information for
+        later label addition (after axes are finalized).
         
         Args:
             ax: Matplotlib axes to draw on
             df_plot: DataFrame containing the data to plot
             x_series: Series to use for x-axis values (typically time)
-            show_mode_labels: Whether to display mode labels on cycle backgrounds
+            show_mode_labels: Whether mode labels should be added (passed to label method)
+            
+        Returns:
+            List of cycle information dicts for adding labels later, or empty list
         """
         # Check if "Time (s)" column exists
         if self.time_s_column not in df_plot.columns:
             print(f"[Cycle Backgrounds] '{self.time_s_column}' column not found, skipping cycle backgrounds")
-            return
+            return []
         
         try:
             # Get the time column and convert to numeric
@@ -86,11 +89,14 @@ class CycleBackgroundRenderer:
             # Check if Mode column exists for labeling cycles
             mode_column_exists = self.mode_column in df_plot.columns
             if mode_column_exists and show_mode_labels:
-                print(f"[Cycle Backgrounds] '{self.mode_column}' column found - will display cycle names")
+                print(f"[Cycle Backgrounds] '{self.mode_column}' column found - will display cycle names after layout is finalized")
             elif mode_column_exists and not show_mode_labels:
                 print(f"[Cycle Backgrounds] '{self.mode_column}' column found - mode labels disabled by user")
             
-            # Add background spans and labels for each cycle
+            # Collect cycle information for later label addition
+            cycle_info_list = []
+            
+            # Add background spans for each cycle
             for i in range(len(cycle_starts) - 1):
                 start_idx = cycle_starts[i]
                 end_idx = cycle_starts[i + 1] - 1
@@ -105,7 +111,7 @@ class CycleBackgroundRenderer:
                           edgecolor='none',
                           zorder=0)  # Behind everything
                 
-                # Add mode name label if Mode column exists AND user wants to see labels
+                # Collect cycle information for later label addition
                 if mode_column_exists and show_mode_labels:
                     # Get the mode name for this cycle (use first non-null value)
                     mode_name = None
@@ -120,33 +126,15 @@ class CycleBackgroundRenderer:
                         # Calculate center position for label
                         x_center = x_series.iloc[(start_idx + end_idx) // 2]
                         
-                        # Get y-axis limits to position text
-                        ylim = ax.get_ylim()
-                        y_position = ylim[0] + (ylim[1] - ylim[0]) * 0.98  # Near top of plot
-                        
-                        # Add text annotation with mode name
-                        # Use a contrasting color for readability
-                        text_color = (0.2, 0.2, 0.2, 0.7)  # Dark gray with transparency
-                        ax.text(
-                            x_center, y_position,
-                            mode_name,
-                            fontsize=10,
-                            fontweight='bold',
-                            color=text_color,
-                            ha='center',
-                            va='top',
-                            bbox=dict(
-                                boxstyle='round,pad=0.5',
-                                facecolor='white',
-                                edgecolor='none',
-                                alpha=0.7
-                            ),
-                            zorder=1  # Just above background, below data
-                        )
+                        cycle_info_list.append({
+                            'x_center': x_center,
+                            'mode_name': mode_name,
+                            'cycle_num': i + 1,
+                        })
                         
                         # Log mode name for first few cycles
                         if i < 3:
-                            print(f"[Cycle Backgrounds] Cycle {i+1}: Mode '{mode_name}'")
+                            print(f"[Cycle Backgrounds] Cycle {i+1}: Mode '{mode_name}' (label will be added after layout)")
                 
                 # Log first few cycles for debugging
                 if i < 3:
@@ -155,12 +143,70 @@ class CycleBackgroundRenderer:
                           f"color RGB({colors_list[i][0]:.2f}, {colors_list[i][1]:.2f}, {colors_list[i][2]:.2f})")
             
             if mode_column_exists and show_mode_labels:
-                print(f"[Cycle Backgrounds] Added {len(colors_list)} cycle backgrounds with mode labels")
+                print(f"[Cycle Backgrounds] Added {len(colors_list)} cycle backgrounds, {len(cycle_info_list)} mode labels pending")
             else:
                 print(f"[Cycle Backgrounds] Added {len(colors_list)} cycle backgrounds with 15% opacity")
             
+            return cycle_info_list
+            
         except Exception as e:
             print(f"[Cycle Backgrounds] Failed to add cycle backgrounds: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+    
+    def add_mode_labels(
+        self,
+        ax: matplotlib.axes.Axes,
+        cycle_info_list: list,
+    ) -> None:
+        """Add mode labels to cycle backgrounds after axes are finalized.
+        
+        This should be called after all data is plotted and tight_layout is applied,
+        to ensure the y-axis limits are final and labels are positioned correctly.
+        
+        Args:
+            ax: Matplotlib axes to draw on
+            cycle_info_list: List of cycle info dicts from add_cycle_backgrounds()
+        """
+        if not cycle_info_list:
+            return
+        
+        try:
+            # Get y-axis limits (should be finalized at this point)
+            ylim = ax.get_ylim()
+            y_position = ylim[0] + (ylim[1] - ylim[0]) * 0.98  # Near top of plot
+            
+            # Add text annotations for each cycle
+            for cycle_info in cycle_info_list:
+                x_center = cycle_info['x_center']
+                mode_name = cycle_info['mode_name']
+                cycle_num = cycle_info['cycle_num']
+                
+                # Add text annotation with mode name
+                # Use a contrasting color for readability
+                text_color = (0.2, 0.2, 0.2, 0.7)  # Dark gray with transparency
+                ax.text(
+                    x_center, y_position,
+                    mode_name,
+                    fontsize=10,
+                    fontweight='bold',
+                    color=text_color,
+                    ha='center',
+                    va='top',
+                    bbox=dict(
+                        boxstyle='round,pad=0.5',
+                        facecolor='white',
+                        edgecolor='none',
+                        alpha=0.7
+                    ),
+                    zorder=1  # Just above background, below data
+                )
+            
+            print(f"[Cycle Backgrounds] Added {len(cycle_info_list)} mode labels at y={y_position:.2f}")
+            
+        except Exception as e:
+            print(f"[Cycle Backgrounds] Failed to add mode labels: {e}")
             import traceback
             traceback.print_exc()
 

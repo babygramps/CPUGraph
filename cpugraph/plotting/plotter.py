@@ -162,7 +162,8 @@ class SensorPlotter:
         x_series = df_plot['_plot_time'] if '_plot_time' in df_plot.columns else df_plot[time_column]
         
         # Add cycle backgrounds if "Time (s)" column exists
-        self.cycle_renderer.add_cycle_backgrounds(ax_left, df_plot, x_series, options.show_mode_labels)
+        # This returns cycle info for adding labels after layout is finalized
+        cycle_info_list = self.cycle_renderer.add_cycle_backgrounds(ax_left, df_plot, x_series, options.show_mode_labels)
         
         # Reset last-plotted lines tracking
         self.last_series_lines = {"left": {}, "right": {}}
@@ -234,6 +235,11 @@ class SensorPlotter:
         
         # Apply tight layout
         self.fig.tight_layout()
+        
+        # Add mode labels after layout is finalized
+        # This ensures labels are positioned correctly based on final axis limits
+        if cycle_info_list:
+            self.cycle_renderer.add_mode_labels(ax_left, cycle_info_list)
         
         print(f"[Plot] Plotted {len(left_columns)} left + {len(right_columns)} right series ({len(df_plot)} points)")
         

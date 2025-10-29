@@ -1244,7 +1244,7 @@ class SensorDashboardApp(tk.Tk):
             return
         
         # Get smoothing parameters
-        smoothing_window = 21
+        smoothing_window = 100
         if self.smooth_var.get():
             try:
                 smoothing_window = int(self.window_entry.get())
