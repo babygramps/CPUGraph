@@ -42,6 +42,7 @@ from ui.controls import (
     TimeWindowPanel,
     CO2CalculationPanel,
 )
+from ui.selection import SeriesSelectionManager
 
 
 class SensorDashboardApp(tk.Tk):
@@ -87,10 +88,15 @@ class SensorDashboardApp(tk.Tk):
         self.df: Optional[pd.DataFrame] = None
         self.time_col: Optional[str] = None
         self.all_columns: List[str] = []  # Store all available columns
-        self.left_selected: set[str] = set()  # Track selected items
-        self.right_selected: set[str] = set()  # Track selected items
         self.column_display_map: Dict[str, str] = {}  # Map display names to actual column names
         self.column_to_display: Dict[str, str] = {}  # Reverse map: actual column names to display names
+        
+        # Initialize selection manager (will be updated when file is loaded)
+        self.selection_mgr = SeriesSelectionManager(
+            all_columns=self.all_columns,
+            column_to_display=self.column_to_display,
+            column_display_map=self.column_display_map,
+        )
         
         # Store custom line properties for each series (keyed by actual column name)
         self.series_properties = {}  # {column_name: {'color': str, 'linestyle': str, 'linewidth': float, 'marker': str, 'markersize': float}}
@@ -166,16 +172,11 @@ class SensorDashboardApp(tk.Tk):
         # Calculate adaptive widths based on screen size
         listbox_width = max(min(int(screen_width / 25), 50), 35)
         
-        # Series selector panel
+        # Series selector panel (with integrated selection management)
         self.series_selector = SeriesSelector(
             mid, self,
+            selection_manager=self.selection_mgr,
             listbox_width=listbox_width,
-            on_filter_focus_in=self.on_filter_focus_in,
-            on_filter_focus_out=self.on_filter_focus_out,
-            on_filter_keyrelease=self.filter_listbox,
-            on_selection_changed=self.update_selection_tracking,
-            on_select_all=self.select_all,
-            on_deselect_all=self.deselect_all,
         )
         self.series_selector.pack(side=tk.LEFT, padx=calc_padding, pady=calc_padding//2, fill=tk.Y)
         
@@ -420,152 +421,12 @@ class SensorDashboardApp(tk.Tk):
         return self.column_display_map.get(display_name, display_name)
     
     # toggle_smooth is now handled by PlotOptionsPanel
-
-    def on_filter_focus_in(self, entry):
-        """Clear placeholder text when filter box is focused."""
-        if entry.get() == "Filter...":
-            entry.delete(0, tk.END)
-            entry.config(foreground="black")
-
-    def on_filter_focus_out(self, entry):
-        """Restore placeholder text if filter box is empty."""
-        if not entry.get():
-            entry.insert(0, "Filter...")
-            entry.config(foreground="gray")
+    # on_filter_focus_in and on_filter_focus_out are now handled by SelectionManager
     
-    def update_selection_tracking(self, side):
-        """Update the selection tracking set when user clicks on listbox items.
-        
-        This ensures selections/deselections are immediately tracked without
-        waiting for the filter to refresh.
-        """
-        if side == "left":
-            listbox = self.left_list
-            selected_set = self.left_selected
-        else:
-            listbox = self.right_list
-            selected_set = self.right_selected
-        
-        # Update tracking with current selections (as display names)
-        selected_set.clear()
-        indices = listbox.curselection()
-        for i in indices:
-            item = listbox.get(i)
-            # Skip separator lines
-            if not item.startswith("─"):
-                selected_set.add(item)
-        
-        # Log selection changes for debugging
-        print(f"[Selection] {side.capitalize()} axis: {len(selected_set)} items selected")
+    # update_selection_tracking is now handled by SelectionManager
 
-    def filter_listbox(self, side):
-        """Filter the listbox based on the search text.
-        
-        Previously selected items always remain visible and selected,
-        even if they don't match the current filter.
-        """
-        if not self.all_columns:
-            return
-        
-        # Get the appropriate filter entry and listbox
-        if side == "left":
-            filter_entry = self.left_filter
-            listbox = self.left_list
-            selected_set = self.left_selected
-        else:
-            filter_entry = self.right_filter
-            listbox = self.right_list
-            selected_set = self.right_selected
-        
-        # Update selected items tracking before clearing
-        for idx in listbox.curselection():
-            selected_set.add(listbox.get(idx))
-        
-        # Get filter text
-        filter_text = filter_entry.get().strip().lower()
-        if filter_text == "filter...":
-            filter_text = ""
-        
-        # Clear and repopulate listbox
-        listbox.delete(0, tk.END)
-        
-        # Track items we've already added
-        added_items = set()
-        selected_count = 0
-        matched_count = 0
-        
-        # FIRST: Add all previously selected items (always visible)
-        for col in self.all_columns:
-            display_name = self.column_to_display.get(col, col)
-            if display_name in selected_set:
-                listbox.insert(tk.END, display_name)
-                listbox.selection_set(tk.END)
-                added_items.add(display_name)
-                selected_count += 1
-        
-        # Add separator if we have selected items and a filter is active
-        if selected_count > 0 and filter_text:
-            listbox.insert(tk.END, "─" * 40)
-            added_items.add("─" * 40)
-        
-        # SECOND: Add filtered items (that aren't already selected)
-        for col in self.all_columns:
-            display_name = self.column_to_display.get(col, col)
-            # Skip if already added, or if doesn't match filter
-            if display_name in added_items:
-                continue
-            # Filter based on display name (which includes both column name and description)
-            if not filter_text or filter_text in display_name.lower():
-                listbox.insert(tk.END, display_name)
-                matched_count += 1
-        
-        # Log filtering activity
-        if filter_text:
-            print(f"[Filter] {side.capitalize()} axis: '{filter_text}' matched {matched_count} new + {selected_count} selected = {matched_count + selected_count} total items")
-        else:
-            print(f"[Filter] {side.capitalize()} axis: No filter, showing all {len(self.all_columns)} columns ({selected_count} selected)")
-
-    def select_all(self, side):
-        """Select all visible items in the listbox."""
-        if side == "left":
-            listbox = self.left_list
-            selected_set = self.left_selected
-        else:
-            listbox = self.right_list
-            selected_set = self.right_selected
-        
-        # Select all visible items (except separator)
-        count = 0
-        for i in range(listbox.size()):
-            item = listbox.get(i)
-            if not item.startswith("─"):
-                listbox.selection_set(i)
-                selected_set.add(item)
-                count += 1
-        
-        print(f"[Select All] {side.capitalize()} axis: Selected {count} visible columns")
-
-    def deselect_all(self, side):
-        """Deselect all items in the listbox."""
-        if side == "left":
-            listbox = self.left_list
-            selected_set = self.left_selected
-        else:
-            listbox = self.right_list
-            selected_set = self.right_selected
-        
-        # Get currently visible items to remove from tracking (skip separator)
-        visible_items = [listbox.get(i) for i in range(listbox.size()) 
-                        if not listbox.get(i).startswith("─")]
-        
-        # Clear selection
-        listbox.selection_clear(0, tk.END)
-        
-        # Remove only visible items from tracking set
-        for item in visible_items:
-            selected_set.discard(item)
-        
-        print(f"[Deselect All] {side.capitalize()} axis: Deselected {len(visible_items)} visible columns")
+    # filter_listbox, select_all, and deselect_all are now handled by SeriesSelectionManager
+    # (called directly from SeriesSelector, not from app.py)
 
     def export_graph(self, fmt):
         if self.df is None:
@@ -630,8 +491,9 @@ class SensorDashboardApp(tk.Tk):
         self.all_columns = result.numeric_columns
         self.column_display_map = result.display_to_column
         self.column_to_display = result.column_to_display
-        self.left_selected.clear()
-        self.right_selected.clear()
+        
+        # Update selection manager with new columns
+        self.selection_mgr.update_columns(self.all_columns, self.column_to_display)
         
         # Update time selector with new data
         self.time_selector.set_data(self.df, self.time_col)
@@ -665,7 +527,7 @@ class SensorDashboardApp(tk.Tk):
             if any(sensor_id in column.upper() for sensor_id in DEFAULT_LEFT_AXIS_SENSORS):
                 display_name = self.column_to_display[column]
                 self.left_list.selection_set(index)
-                self.left_selected.add(display_name)
+                self.selection_mgr.left_selected.add(display_name)
                 print(f"[File Load] Auto-selected: {display_name}")
 
         self.status.set(
@@ -675,35 +537,16 @@ class SensorDashboardApp(tk.Tk):
         self.populate_co2_dropdowns(self.all_columns)
     
     def get_selected(self, listbox, side):
-        """Get selected items from a listbox and update tracking.
+        """Get selected items from a listbox (delegates to SelectionManager).
         
-        Returns the actual column names (not display names) for plotting.
+        Args:
+            listbox: The listbox widget
+            side: 'left' or 'right'
+            
+        Returns:
+            List of actual column names (not display names) for plotting
         """
-        # Determine which tracking set to use
-        if side == "left":
-            selected_set = self.left_selected
-        else:
-            selected_set = self.right_selected
-        
-        # Update tracking with current selections (as display names)
-        selected_set.clear()
-        indices = listbox.curselection()
-        for i in indices:
-            item = listbox.get(i)
-            # Skip separator lines
-            if not item.startswith("─"):
-                selected_set.add(item)
-        
-        # Convert display names to actual column names for plotting
-        actual_columns = []
-        for display_name in selected_set:
-            # Skip separator lines (safety check)
-            if display_name.startswith("─"):
-                continue
-            actual_col = self.column_display_map.get(display_name, display_name)
-            actual_columns.append(actual_col)
-        
-        return actual_columns
+        return self.selection_mgr.get_selected_columns(side, listbox)
     
     def update_vm(self):
         """Calculate molar volume (Vm) based on temperature, pressure, and compressibility.
@@ -847,8 +690,7 @@ class SensorDashboardApp(tk.Tk):
         # Clear current selections
         self.left_list.selection_clear(0, tk.END)
         self.right_list.selection_clear(0, tk.END)
-        self.left_selected.clear()
-        self.right_selected.clear()
+        self.selection_mgr.clear_selections()
         
         # Add CO2 sensors to left axis (comparing actual column names)
         left_count = 0
@@ -857,7 +699,7 @@ class SensorDashboardApp(tk.Tk):
             actual_col = self.column_display_map.get(display_name, display_name)
             if actual_col in [inlet_co2_col, outlet_co2_col] and actual_col:
                 self.left_list.selection_set(i)
-                self.left_selected.add(display_name)
+                self.selection_mgr.left_selected.add(display_name)
                 left_count += 1
         
         # Add flow sensor to right axis (comparing actual column names)
@@ -867,7 +709,7 @@ class SensorDashboardApp(tk.Tk):
             actual_col = self.column_display_map.get(display_name, display_name)
             if actual_col == inlet_flow_col and actual_col:
                 self.right_list.selection_set(i)
-                self.right_selected.add(display_name)
+                self.selection_mgr.right_selected.add(display_name)
                 right_count += 1
         
         print(f"[Quick Plot] Selected {left_count} CO2 sensors (left) and {right_count} flow sensor (right)")
