@@ -501,6 +501,9 @@ class SensorDashboardApp(tk.Tk):
         
         # Update time selector with new data
         self.time_selector.set_data(self.df, self.time_col)
+        
+        # Update mode filter with available modes
+        self.time_window.update_available_modes(self.df, self.time_col)
 
         print(
             f"[File Load] Found {len(self.all_columns)} numeric columns in {result.source_path.name}"
