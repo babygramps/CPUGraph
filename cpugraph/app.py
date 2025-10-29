@@ -138,9 +138,24 @@ class SensorDashboardApp(tk.Tk):
         top = ttk.Frame(main_container)
         top.grid(row=0, column=0, sticky="ew", padx=base_padding, pady=max(base_padding//2, 4))
         ttk.Button(top, text="Open Data File...", command=self.open_csv).pack(side=tk.LEFT)
+        ttk.Button(top, text="Clear/Reset", command=self.reset_session).pack(side=tk.LEFT, padx=5)
         ttk.Button(top, text="Export PNG", command=lambda: self.export_graph('png')).pack(side=tk.LEFT, padx=5)
         ttk.Button(top, text="Export JPEG", command=lambda: self.export_graph('jpeg')).pack(side=tk.LEFT, padx=5)
-        self.status = tk.StringVar(value="No file loaded")
+        
+        # File name display (prominent)
+        file_frame = ttk.LabelFrame(top, text="Loaded File")
+        file_frame.pack(side=tk.LEFT, padx=10)
+        self.filename_var = tk.StringVar(value="None")
+        filename_label = ttk.Label(
+            file_frame, 
+            textvariable=self.filename_var,
+            font=("TkDefaultFont", 9, "bold"),
+            foreground="darkblue"
+        )
+        filename_label.pack(padx=6, pady=2)
+        
+        # Status label (for other messages)
+        self.status = tk.StringVar(value="Ready")
         ttk.Label(top, textvariable=self.status).pack(side=tk.LEFT, padx=10)
 
         # === Scrollable controls area ===
@@ -561,12 +576,150 @@ class SensorDashboardApp(tk.Tk):
                 self.selection_mgr.left_selected.add(display_name)
                 print(f"[File Load] Auto-selected: {display_name}")
 
+        # Update filename display
+        self.filename_var.set(result.source_path.name)
+        
+        # Update status
         self.status.set(
-            f"Loaded: {result.source_path.name} ({len(self.df)} rows, {len(self.all_columns)} numeric columns)"
+            f"Loaded {len(self.df)} rows, {len(self.all_columns)} numeric columns"
         )
 
         self.populate_co2_dropdowns(self.all_columns)
         self.populate_rh_dropdowns(self.all_columns)
+    
+    def reset_session(self):
+        """Clear all selections, inputs, and plots to start fresh with the current file."""
+        if self.df is None:
+            messagebox.showinfo("No File Loaded", "Please load a data file first.")
+            return
+        
+        print(f"\n[Reset] ========================================")
+        print(f"[Reset] Clearing all selections and resetting session...")
+        
+        # Clear all series selections
+        self.left_list.selection_clear(0, tk.END)
+        self.right_list.selection_clear(0, tk.END)
+        self.selection_mgr.clear_selections()
+        print(f"[Reset] Cleared series selections")
+        
+        # Reset filter boxes
+        self.left_filter.delete(0, tk.END)
+        self.left_filter.insert(0, "Filter...")
+        self.left_filter.config(foreground="gray")
+        self.right_filter.delete(0, tk.END)
+        self.right_filter.insert(0, "Filter...")
+        self.right_filter.config(foreground="gray")
+        print(f"[Reset] Reset filter boxes")
+        
+        # Clear time window entries
+        self.start_entry.delete(0, tk.END)
+        self.end_entry.delete(0, tk.END)
+        print(f"[Reset] Cleared time window")
+        
+        # Reset graph labels to defaults
+        self.graph_title.delete(0, tk.END)
+        self.graph_title.insert(0, "Sensor Time Series")
+        self.left_ylabel.delete(0, tk.END)
+        self.left_ylabel.insert(0, "Left axis")
+        self.right_ylabel.delete(0, tk.END)
+        self.right_ylabel.insert(0, "Right axis")
+        self.xlabel.delete(0, tk.END)
+        self.xlabel.insert(0, self.time_col or "Time")
+        print(f"[Reset] Reset graph labels")
+        
+        # Reset CO2 calculation fields
+        self.inlet_co2_combo.set("")
+        self.outlet_co2_combo.set("")
+        self.inlet_flow_combo.set("")
+        self.temp_entry.delete(0, tk.END)
+        self.temp_entry.insert(0, "25")
+        self.pressure_entry.delete(0, tk.END)
+        self.pressure_entry.insert(0, "1.0")
+        self.pressure_unit_combo.current(0)
+        self.z_entry.delete(0, tk.END)
+        self.z_entry.insert(0, "1.0")
+        self.vm_display.config(text="24.465")
+        self.co2_result_var.set("No calculation yet")
+        print(f"[Reset] Reset CO2 calculation fields")
+        
+        # Reset RH calculation fields
+        self.temp_combo.set("")
+        self.dewpoint_combo.set("")
+        self.pressure_rh_combo.set("")
+        self.rh_result_var.set("Select transmitters and calculate")
+        print(f"[Reset] Reset RH calculation fields")
+        
+        # Remove any calculated RH columns from the dataframe
+        rh_columns_removed = []
+        if self.df is not None:
+            for col in list(self.df.columns):
+                if col.startswith("RH_CALCULATED_"):
+                    self.df.drop(columns=[col], inplace=True)
+                    # Also remove from all_columns list
+                    if col in self.all_columns:
+                        self.all_columns.remove(col)
+                    # Remove from display maps
+                    display_name = self.column_to_display.get(col)
+                    if display_name:
+                        del self.column_to_display[col]
+                        del self.column_display_map[display_name]
+                    rh_columns_removed.append(col)
+            
+            if rh_columns_removed:
+                print(f"[Reset] Removed calculated RH columns: {', '.join(rh_columns_removed)}")
+                # Repopulate listboxes without RH columns
+                self.left_list.delete(0, tk.END)
+                self.right_list.delete(0, tk.END)
+                for column in self.all_columns:
+                    display_name = self.column_to_display[column]
+                    self.left_list.insert(tk.END, display_name)
+                    self.right_list.insert(tk.END, display_name)
+        
+        # Update selection manager
+        self.selection_mgr.update_columns(
+            self.all_columns,
+            self.column_to_display,
+            self.column_display_map
+        )
+        
+        # Clear the graph
+        self.fig.clear()
+        self.ax_left = self.fig.add_subplot(111)
+        self.ax_left.text(
+            0.5, 0.5, 
+            'Ready to plot\nSelect series and click "Plot"',
+            ha='center', va='center',
+            fontsize=14, color='gray',
+            transform=self.ax_left.transAxes
+        )
+        self.ax_left.set_xticks([])
+        self.ax_left.set_yticks([])
+        self.canvas.draw()
+        print(f"[Reset] Cleared graph")
+        
+        # Re-populate dropdowns with defaults
+        self.populate_co2_dropdowns(self.all_columns)
+        self.populate_rh_dropdowns(self.all_columns)
+        
+        # Auto-select default sensors on the left axis (like initial load)
+        for index, column in enumerate(self.all_columns):
+            if any(sensor_id in column.upper() for sensor_id in DEFAULT_LEFT_AXIS_SENSORS):
+                display_name = self.column_to_display[column]
+                self.left_list.selection_set(index)
+                self.selection_mgr.left_selected.add(display_name)
+        
+        # Update status
+        self.status.set("Session reset - ready to plot")
+        
+        print(f"[Reset] Session reset complete")
+        print(f"[Reset] ========================================\n")
+        
+        messagebox.showinfo(
+            "Session Reset",
+            "All selections, calculations, and plots have been cleared.\n\n"
+            "Default sensors have been re-selected.\n"
+            "You can now start fresh with your analysis."
+        )
     
     def get_selected(self, listbox, side):
         """Get selected items from a listbox (delegates to SelectionManager).
