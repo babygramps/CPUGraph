@@ -1,0 +1,16 @@
+# Build directories
+build/
+dist/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Python compiled files
+*.pyw
+*.pyz
+
+# Executable files
+*.exe
